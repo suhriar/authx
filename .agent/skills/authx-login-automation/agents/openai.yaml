@@ -1,0 +1,4 @@
+interface:
+  display_name: "AuthX Login Automation"
+  short_description: "Maintain X login automation flow"
+  default_prompt: "Use $authx-login-automation to fix or extend the AuthX login workflow."

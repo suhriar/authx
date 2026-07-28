@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AuthX</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <img class="brand-mark" src="public/assets/icon48.png" alt="" aria-hidden="true">
+        <div>
+          <h1>AuthX</h1>
+          <p id="siteLine">Cookie session exporter</p>
+        </div>
+        <span class="badge" id="tabBadge">Checking</span>
+      </header>
+
+      <section class="section">
+        <div class="section-title">
+          <h2>Account</h2>
+          <span>Local storage</span>
+        </div>
+        <label>
+          Username
+          <input id="username" name="username" autocomplete="username" placeholder="Username">
+        </label>
+        <label>
+          Password
+          <span class="password-field">
+            <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Password">
+            <button
+              id="togglePassword"
+              class="icon-button password-toggle"
+              type="button"
+              aria-label="Show password"
+              title="Show password"
+            >
+              <svg class="eye-open" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              <svg class="eye-closed" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m3 3 18 18"></path>
+                <path d="M10.7 5.2A10.5 10.5 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3.2 4.1"></path>
+                <path d="M6.6 6.6A17 17 0 0 0 2.5 12s3.5 7 9.5 7a9.8 9.8 0 0 0 4.1-.9"></path>
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path>
+              </svg>
+            </button>
+          </span>
+        </label>
+        <label>
+          TOTP Secret
+          <input id="totpSecret" name="totpSecret" autocomplete="off" spellcheck="false" placeholder="FBTSCVXXXXXXXXXXXX">
+        </label>
+        <details>
+          <summary>Additional challenge fields</summary>
+          <label class="details-field">
+            Email
+            <input id="email" name="email" autocomplete="email" placeholder="Optional">
+          </label>
+        </details>
+        <div class="toolbar">
+          <button id="saveAccount" type="button">Save</button>
+          <button id="clearAccount" class="secondary" type="button">Delete</button>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-title">
+          <h2>Export</h2>
+          <span>Destination</span>
+        </div>
+        <div class="export-card">
+          <div class="export-icon" aria-hidden="true">JSON</div>
+          <div>
+            <strong id="destinationName">Downloads</strong>
+            <span id="downloadName">username.json</span>
+          </div>
+          <button id="changeDestination" class="secondary small-button" type="button">Change</button>
+        </div>
+        <p class="helper-text" id="destinationHelp">Default destination: Downloads. Use Change to export to a custom folder.</p>
+      </section>
+
+      <section class="status-section">
+        <div class="status" id="status">Ready</div>
+        <div class="workflow-actions">
+          <button id="loginExport" class="primary full" type="button">Login & Export</button>
+          <button id="stopWorkflow" class="danger-button full" type="button" hidden>Stop</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

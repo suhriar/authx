@@ -1,0 +1,4 @@
+interface:
+  display_name: "AuthX Verification"
+  short_description: "Verify AuthX changes before handoff"
+  default_prompt: "Use $authx-verification to validate AuthX changes before handoff."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "AuthX Popup UI"
+  short_description: "Maintain AuthX popup controls and states"
+  default_prompt: "Use $authx-popup-ui to update the AuthX popup UI safely."

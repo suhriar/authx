@@ -1,0 +1,4 @@
+interface:
+  display_name: "AuthX OTP Handling"
+  short_description: "Maintain TOTP and OTP entry reliability"
+  default_prompt: "Use $authx-otp-handling to improve AuthX TOTP or OTP input behavior."

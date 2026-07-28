@@ -1,0 +1,4 @@
+interface:
+  display_name: "AuthX Cookie Export"
+  short_description: "Maintain AuthX cookie export workflow"
+  default_prompt: "Use $authx-cookie-export to update AuthX cookie export behavior."
