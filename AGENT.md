@@ -21,7 +21,7 @@ Core rules:
 - `popup.html`: Popup structure for account, export destination, status, and workflow controls.
 - `popup.css`: Popup styling, including the password eye toggle.
 - `popup.js`: Popup state, account storage, active-tab validation, password visibility toggle, destination selection, and workflow start/stop.
-- `background.js`: Workflow orchestration, content-script messaging, cookie waiting, cookie export, status broadcast, and cancellation handling.
+- `background.js`: Workflow orchestration, active-tab cookie-store selection, content-script messaging, cookie waiting, cookie export, status broadcast, and cancellation handling.
 - `content.js`: X/Twitter page automation, state detection, form filling, password-dialog validation, TOTP-form waiting, OTP entry, and cancellation checks.
 - `totp.js`: Local RFC 6238 TOTP generation with Web Crypto.
 - `README.md`: User-facing setup, usage, and security notes.
@@ -124,6 +124,7 @@ Maintenance expectations:
 - Keep status updates best-effort.
 - Keep cancellation checks in long-running loops.
 - Continue waiting for cookies after the content script finishes or redirects.
+- Resolve cookies from the active tab's cookie store. Incognito exports must use the incognito `storeId`, not the default browser profile.
 - Required cookies are `auth_token` and `ct0`.
 
 ## Popup Behavior

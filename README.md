@@ -20,6 +20,7 @@ The Playwright reference was adapted into browser-native extension logic. AuthX 
 - Download cookie JSON to the browser's default Downloads folder.
 - Change the export destination to a custom local folder when needed.
 - Detect active `x.com` or `twitter.com` tabs before running.
+- Export cookies from the active tab's cookie store, including incognito when the extension is enabled there.
 - Automate username, password, and verification-code screens.
 - Confirm the password dialog's username field is present or prefilled before submitting password.
 - Wait for the verification-code form after password submit before generating and entering TOTP.
@@ -122,7 +123,7 @@ AuthX
 - `popup.html`: Extension dashboard for credentials, export destination, status, and workflow control.
 - `popup.css`: Popup styling, including the password visibility toggle.
 - `popup.js`: Storage, active-tab validation, password visibility toggle, destination controls, and workflow start.
-- `background.js`: Background workflow orchestration, cookie collection from `x.com` and `twitter.com`, account cleanup, and Downloads export.
+- `background.js`: Background workflow orchestration, active-tab cookie-store selection, cookie collection from `x.com` and `twitter.com`, account cleanup, and Downloads export.
 - `content.js`: X page state detection, login form filling, password-dialog checks, button clicking, TOTP-form waiting, OTP handling, and session checks.
 - `totp.js`: Local RFC 6238 TOTP generation using Web Crypto.
 

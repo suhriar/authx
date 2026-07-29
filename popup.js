@@ -246,7 +246,8 @@ async function sendTabMessage(tabId, message) {
 }
 
 async function exportCookies() {
-  const response = await chrome.runtime.sendMessage({ type: "AUTHX_EXPORT_COOKIES" });
+  const tab = await getActiveTab();
+  const response = await chrome.runtime.sendMessage({ type: "AUTHX_EXPORT_COOKIES", tabId: tab?.id });
   if (!response?.ok) {
     throw new Error(response?.error || "Failed to export cookies.");
   }

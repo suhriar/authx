@@ -11,9 +11,16 @@ function cookieArrayToObject(cookies) {
   }, {});
 }
 
-async function getAllXCookies() {
+async function getCookieStoreIdForTab(tabId) {
+  if (!Number.isInteger(tabId)) return "";
+  const stores = await chrome.cookies.getAllCookieStores();
+  const store = stores.find((candidate) => candidate.tabIds.includes(tabId));
+  return store?.id || "";
+}
+
+async function getAllXCookies(storeId = "") {
   const cookieSets = await Promise.all(
-    AUTHX_COOKIE_URLS.map((url) => chrome.cookies.getAll({ url })),
+    AUTHX_COOKIE_URLS.map((url) => chrome.cookies.getAll(storeId ? { url, storeId } : { url })),
   );
   const byName = new Map();
 
@@ -58,13 +65,13 @@ async function sendTabMessage(tabId, message) {
   }
 }
 
-async function waitForSessionCookies() {
+async function waitForSessionCookies(storeId = "") {
   const deadline = Date.now() + COOKIE_WAIT_TIMEOUT_MS;
   let cookies = {};
 
   while (Date.now() < deadline) {
     await throwIfCancelled();
-    cookies = await getAllXCookies();
+    cookies = await getAllXCookies(storeId);
     if (missingRequiredCookies(cookies).length === 0) {
       return cookies;
     }
@@ -92,6 +99,7 @@ async function runWorkflow({ tabId, account }) {
 
   try {
     await throwIfCancelled();
+    const cookieStoreId = await getCookieStoreIdForTab(tabId);
     await setJobStatus("Starting login workflow");
     try {
       const loginResult = await sendTabMessage(tabId, { type: "AUTHX_RUN_LOGIN", account });
@@ -110,7 +118,7 @@ async function runWorkflow({ tabId, account }) {
 
     await setJobStatus("Exporting Cookies");
     await throwIfCancelled();
-    const cookies = await waitForSessionCookies();
+    const cookies = await waitForSessionCookies(cookieStoreId);
     const fileName = `${account.username}.json`;
     await downloadJsonFile(fileName, cookies);
     await chrome.storage.local.remove("account");
@@ -129,7 +137,8 @@ async function runWorkflow({ tabId, account }) {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "AUTHX_EXPORT_COOKIES") {
-    getAllXCookies()
+    getCookieStoreIdForTab(message.tabId)
+      .then((storeId) => getAllXCookies(storeId))
       .then((cookies) => {
         sendResponse({ ok: true, cookies, missing: missingRequiredCookies(cookies) });
       })

@@ -28,6 +28,7 @@ All credential handling, TOTP generation, cookie collection, and file export hap
 - TOTP-form waiting after password submit before generating and entering the code.
 - Paste-first OTP entry with digit-by-digit fallback for split OTP inputs.
 - Background cookie wait and export after successful authentication.
+- Active-tab cookie-store selection so normal and incognito sessions export the correct cookies.
 - Required cookie validation for `auth_token` and `ct0`.
 - Download export fallback to the browser's Downloads folder.
 - Optional custom export folder through the File System Access API.
@@ -124,7 +125,7 @@ authx/
 - `popup.html`: Popup markup for account, export, status, and workflow controls.
 - `popup.css`: Popup visual styling, including password visibility button styling.
 - `popup.js`: Popup state, account storage, active-tab validation, password visibility toggle, destination selection, and workflow start/stop messages.
-- `background.js`: Long-running workflow orchestration, cookie collection, required-cookie validation, Downloads export, and status broadcasts.
+- `background.js`: Long-running workflow orchestration, active-tab cookie-store selection, cookie collection, required-cookie validation, Downloads export, and status broadcasts.
 - `content.js`: X page automation, state detection, form filling, password-dialog validation, TOTP-form waiting, OTP input handling, and cancellation checks.
 - `totp.js`: RFC 6238-compatible local TOTP generation using Web Crypto.
 - `README.md`: User-facing installation, usage, security, and limitation notes.
@@ -169,6 +170,11 @@ Cookie sources:
 https://x.com
 https://twitter.com
 ```
+
+Cookie store:
+
+- Resolve the Chrome cookie store from the active login tab's `tabId`.
+- Use that `storeId` for cookie wait/export so incognito sessions export incognito cookies instead of the normal browser profile's cookies.
 
 Required cookies:
 
