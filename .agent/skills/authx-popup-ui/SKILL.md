@@ -1,6 +1,6 @@
 ---
 name: authx-popup-ui
-description: Maintain the AuthX Chrome extension popup UI, including popup.html, popup.css, popup.js, account input behavior, password visibility toggle, status display, active-tab gating, save/delete actions, destination controls, and busy/stop workflow state. Use when changing popup layout, styling, field validation, or popup-facing workflow controls.
+description: Maintain the AuthX Chrome extension popup UI, including popup.html, popup.css, popup.js, account input behavior, avatar page detection and credential extraction, password visibility toggle, status display, active-tab gating, save/delete actions, destination controls, and busy/stop workflow state. Use when changing popup layout, styling, field validation, avatar import, or popup-facing workflow controls.
 ---
 
 # AuthX Popup UI
@@ -16,6 +16,8 @@ Use this skill before changing the popup surface.
 ## Contract
 
 - Enable `Login & Export` only when the active tab is X/Twitter, required fields are present, and no workflow is running.
+- Enable `Import & Export` when the current tab path matches `/avatars/<id>` on any domain.
+- Extract avatar username, password, and 2FA from the active page only after the user opens/clicks the popup action.
 - Required fields: username, password, TOTP secret.
 - Preserve password exactly. Do not trim password values.
 - Keep optional email under `Additional challenge fields`.
@@ -26,6 +28,7 @@ Use this skill before changing the popup surface.
 ## Update Rules
 
 - If adding an active workflow status, add it to `PROCESSING_STATUSES` in `popup.js`.
+- If changing avatar extraction, keep domain detection path-based rather than hardcoding `tech-86.com`.
 - Keep controls as accessible native buttons/inputs.
 - Avoid adding UI libraries for this small extension.
 - Keep the compact popup layout and existing color system unless the user asks for a redesign.

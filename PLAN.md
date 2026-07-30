@@ -14,6 +14,8 @@ The completed project should let a user:
 6. Let AuthX complete the login flow.
 7. Export all available `x.com` and `twitter.com` cookies as `<username>.json`.
 
+AuthX also supports starting from an avatar detail page on any domain when the path matches `/avatars/<id>`. In that mode, it extracts the avatar username, password, and 2FA secret from the current page, opens `x.com` in incognito, clears X/Twitter cookies in that incognito store, logs in there, exports cookies from that store, and closes the incognito window after export succeeds.
+
 All credential handling, TOTP generation, cookie collection, and file export happen locally in the browser. No external APIs, telemetry, analytics, or cloud sync are used.
 
 ## Completed Scope
@@ -22,6 +24,10 @@ All credential handling, TOTP generation, cookie collection, and file export hap
 - Local account storage through `chrome.storage.local`.
 - Password visibility toggle in the popup so the user can verify typed credentials.
 - Active tab validation for `x.com` and `twitter.com`.
+- Avatar detail page detection for any domain using the `/avatars/<id>` path.
+- Avatar credential extraction from the current active tab using `activeTab`.
+- Incognito X window creation for avatar-driven login/export.
+- Automatic incognito window close after successful avatar-driven export.
 - Automated login state detection.
 - Username, optional email challenge, password, and TOTP automation.
 - Password dialog handling that verifies the username field before submitting password.
@@ -47,6 +53,22 @@ Open x.com
   -> AuthX runs login automation
   -> AuthX waits for session cookies
   -> AuthX saves <username>.json
+```
+
+Avatar-driven workflow:
+
+```text
+Open /avatars/<id> on any domain
+  -> Open AuthX popup
+  -> AuthX detects Avatar tab
+  -> Import & Export
+  -> Extract username/password/2FA from current page
+  -> Open x.com in incognito
+  -> Clear X/Twitter cookies in the incognito store
+  -> Wait for x.com to fully settle
+  -> Run login automation
+  -> Export incognito cookies
+  -> Close incognito window
 ```
 
 ## Runtime Login Workflow
@@ -75,6 +97,18 @@ Start workflow
   -> Export cookies
 ```
 
+Avatar workflow starts with:
+
+```text
+Extract avatar account from active tab
+  -> Open incognito x.com window
+  -> Clear X/Twitter cookies from that incognito cookie store
+  -> Wait for x.com to settle before injecting login automation
+  -> Run the standard login workflow against that incognito tab
+  -> Export cookies from that tab's cookie store
+  -> Close the incognito window after export succeeds
+```
+
 ## Popup UI Plan
 
 The popup is the user-facing control surface.
@@ -82,6 +116,7 @@ The popup is the user-facing control surface.
 Implemented sections:
 
 - Header with current X tab status.
+- Avatar tab detection with `Avatar` badge and `Import & Export` action.
 - Account card:
   - username input
   - password input
@@ -95,12 +130,13 @@ Implemented sections:
   - change destination button
 - Status and workflow controls:
   - status message
-  - `Login & Export`
+  - `Login & Export` or `Import & Export`
   - `Stop`
 
 Key UX requirements:
 
 - Login is enabled only when the active tab is X/Twitter and required fields are present.
+- Avatar import/export is enabled when the current tab path matches `/avatars/<id>`.
 - During workflow execution, account and destination controls are disabled.
 - The stop button appears only while work is active.
 - The password eye button only changes local input visibility.
@@ -124,8 +160,8 @@ authx/
 - `manifest.json`: MV3 extension metadata, permissions, host permissions, background worker, popup, icons, and content script registration.
 - `popup.html`: Popup markup for account, export, status, and workflow controls.
 - `popup.css`: Popup visual styling, including password visibility button styling.
-- `popup.js`: Popup state, account storage, active-tab validation, password visibility toggle, destination selection, and workflow start/stop messages.
-- `background.js`: Long-running workflow orchestration, active-tab cookie-store selection, cookie collection, required-cookie validation, Downloads export, and status broadcasts.
+- `popup.js`: Popup state, account storage, active-tab/avatar-page validation, avatar credential extraction, password visibility toggle, destination selection, and workflow start/stop messages.
+- `background.js`: Long-running workflow orchestration, incognito X window creation, active-tab cookie-store selection, cookie collection, required-cookie validation, Downloads export, incognito window close, and status broadcasts.
 - `content.js`: X page automation, state detection, form filling, password-dialog validation, TOTP-form waiting, OTP input handling, and cancellation checks.
 - `totp.js`: RFC 6238-compatible local TOTP generation using Web Crypto.
 - `README.md`: User-facing installation, usage, security, and limitation notes.
@@ -220,8 +256,12 @@ Expected workflow statuses:
 - `Waiting for TOTP form`
 - `Generating TOTP`
 - `Already logged in`
+- `Extracting avatar data`
+- `Opening incognito X`
+- `Waiting for X to load`
 - `Waiting for session cookies`
 - `Exporting Cookies`
+- `Closing incognito window`
 - `Stopping...`
 - `Workflow stopped.`
 - `Finish: saved to Downloads as <username>.json`

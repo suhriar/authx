@@ -1,6 +1,8 @@
 const AUTHX_COOKIE_URLS = ["https://x.com", "https://twitter.com"];
 const REQUIRED_COOKIES = ["auth_token", "ct0"];
 const COOKIE_WAIT_TIMEOUT_MS = 90000;
+const TAB_READY_TIMEOUT_MS = 30000;
+const X_APP_SETTLE_MS = 4000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -29,6 +31,27 @@ async function getAllXCookies(storeId = "") {
   }
 
   return cookieArrayToObject([...byName.values()]);
+}
+
+function cookieUrl(cookie) {
+  const domain = cookie.domain.replace(/^\./, "");
+  return `${cookie.secure ? "https" : "http"}://${domain}${cookie.path || "/"}`;
+}
+
+async function clearXCookies(storeId = "") {
+  const cookieSets = await Promise.all(
+    AUTHX_COOKIE_URLS.map((url) => chrome.cookies.getAll(storeId ? { url, storeId } : { url })),
+  );
+
+  await Promise.all(
+    cookieSets.flat().map((cookie) =>
+      chrome.cookies.remove({
+        url: cookieUrl(cookie),
+        name: cookie.name,
+        storeId: cookie.storeId,
+      }),
+    ),
+  );
 }
 
 function missingRequiredCookies(cookies) {
@@ -65,6 +88,27 @@ async function sendTabMessage(tabId, message) {
   }
 }
 
+async function waitForTabReady(tabId) {
+  const deadline = Date.now() + TAB_READY_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    await throwIfCancelled();
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === "complete" && /^https:\/\/([^/]+\.)?(x|twitter)\.com\//i.test(tab.url || "")) {
+      return tab;
+    }
+    await sleep(250);
+  }
+
+  throw new Error("X tab did not finish loading.");
+}
+
+async function waitForXAppSettle(tabId) {
+  await waitForTabReady(tabId);
+  await sleep(X_APP_SETTLE_MS);
+  await throwIfCancelled();
+}
+
 async function waitForSessionCookies(storeId = "") {
   const deadline = Date.now() + COOKIE_WAIT_TIMEOUT_MS;
   let cookies = {};
@@ -93,7 +137,67 @@ async function downloadJsonFile(fileName, data) {
   });
 }
 
-async function runWorkflow({ tabId, account }) {
+async function uploadCredentialFile(uploadTarget, fileName, data) {
+  const { avatarId, apiBaseUrl, authToken } = uploadTarget || {};
+  if (!avatarId) throw new Error("Avatar ID not found.");
+  if (!apiBaseUrl) throw new Error("Avatar API URL not found.");
+  if (!authToken) throw new Error("Authorization token not found.");
+
+  const endpoint = `${apiBaseUrl.replace(/\/$/, "")}/api/v1/backoffice/avatars/credential-file`;
+  const formData = new FormData();
+  const payload = JSON.stringify(data, null, 2);
+  formData.append("avatar_id", avatarId);
+  formData.append("credential_file", new Blob([payload], { type: "application/json" }), fileName);
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      Authorization: `Bearer ${authToken}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Credential upload failed (${response.status}). ${text}`.trim());
+  }
+}
+
+async function closeIncognitoTarget({ tabId, windowId }) {
+  try {
+    if (Number.isInteger(windowId)) {
+      await chrome.windows.remove(windowId);
+      return;
+    }
+    await chrome.tabs.remove(tabId);
+  } catch (_error) {
+    // The window or tab may already be closed by the user.
+  }
+}
+
+async function openIncognitoXTab() {
+  const window = await chrome.windows.create({
+    url: "https://x.com",
+    incognito: true,
+    focused: true,
+  });
+  const tab = window.tabs?.[0];
+  if (!tab?.id) {
+    throw new Error("Failed to open incognito X tab.");
+  }
+  const readyTab = await waitForTabReady(tab.id);
+  return { ...readyTab, windowId: window.id };
+}
+
+async function runWorkflow({
+  tabId,
+  account,
+  closeWindowOnFinish = false,
+  windowId = null,
+  strictAutomation = false,
+  uploadTarget = null,
+}) {
   await chrome.storage.local.set({ account, authxCancel: false });
   await setJobStatus("Processing...", "");
 
@@ -110,7 +214,7 @@ async function runWorkflow({ tabId, account }) {
         throw error;
       }
     } catch (error) {
-      if (error?.authxFatal) {
+      if (error?.authxFatal || strictAutomation) {
         throw error;
       }
       await setJobStatus("Waiting for session cookies");
@@ -120,10 +224,22 @@ async function runWorkflow({ tabId, account }) {
     await throwIfCancelled();
     const cookies = await waitForSessionCookies(cookieStoreId);
     const fileName = `${account.username}.json`;
-    await downloadJsonFile(fileName, cookies);
+    if (uploadTarget) {
+      await setJobStatus("Uploading Cookies");
+      await uploadCredentialFile(uploadTarget, fileName, cookies);
+    } else {
+      await downloadJsonFile(fileName, cookies);
+    }
+    if (closeWindowOnFinish) {
+      await setJobStatus("Closing incognito window");
+      await closeIncognitoTarget({ tabId, windowId });
+    }
     await chrome.storage.local.remove("account");
     await chrome.storage.local.remove("authxCancel");
-    await setJobStatus(`Finish: saved to Downloads as ${fileName}`, "success");
+    await setJobStatus(
+      uploadTarget ? `Finish: uploaded ${fileName}` : `Finish: saved to Downloads as ${fileName}`,
+      "success",
+    );
   } catch (error) {
     if (error?.authxStopped || error?.message === "Workflow stopped.") {
       await setJobStatus("Workflow stopped.", "error");
@@ -133,6 +249,25 @@ async function runWorkflow({ tabId, account }) {
     await chrome.storage.local.remove("authxCancel");
     await setJobStatus(error?.message || "Cookie export failed.", "error");
   }
+}
+
+async function runAvatarWorkflow({ account, uploadTarget }) {
+  await chrome.storage.local.set({ account, authxCancel: false });
+  await setJobStatus("Opening incognito X");
+  const tab = await openIncognitoXTab();
+  const cookieStoreId = await getCookieStoreIdForTab(tab.id);
+  await clearXCookies(cookieStoreId);
+  await setJobStatus("Waiting for X to load");
+  await chrome.tabs.update(tab.id, { url: "https://x.com" });
+  await waitForXAppSettle(tab.id);
+  return runWorkflow({
+    tabId: tab.id,
+    windowId: tab.windowId,
+    account,
+    closeWindowOnFinish: true,
+    strictAutomation: true,
+    uploadTarget,
+  });
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -151,6 +286,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === "AUTHX_START_WORKFLOW") {
     runWorkflow(message).catch((error) => setJobStatus(error?.message || "Cookie export failed.", "error"));
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message?.type === "AUTHX_START_AVATAR_WORKFLOW") {
+    runAvatarWorkflow(message).catch((error) => setJobStatus(error?.message || "Cookie export failed.", "error"));
     sendResponse({ ok: true });
     return false;
   }

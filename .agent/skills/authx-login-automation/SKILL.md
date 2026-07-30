@@ -36,6 +36,7 @@ already_logged_in -> finish login phase
 ## Guardrails
 
 - After password submit, do not treat `unknown` as username. X transition screens can briefly look unknown.
+- After username submit, do not retry username while the password dialog is still loading.
 - Wait for the verification/TOTP form after password submit before generating or entering TOTP.
 - In password dialogs, inspect the same form/dialog as the password input for a username field.
 - Refill username only when the field is editable and missing or different.

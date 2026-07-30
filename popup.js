@@ -1,24 +1,15 @@
-const accountFields = ["username", "password", "totpSecret", "email"];
+const accountFields = ["username", "password", "totpSecret"];
 const REQUIRED_COOKIES = ["auth_token", "ct0"];
-const DB_NAME = "authx";
-const DB_STORE = "handles";
-const DESTINATION_KEY = "exportDestination";
 
 const elements = {
   tabBadge: document.querySelector("#tabBadge"),
   status: document.querySelector("#status"),
-  destinationName: document.querySelector("#destinationName"),
-  downloadName: document.querySelector("#downloadName"),
-  saveAccount: document.querySelector("#saveAccount"),
-  clearAccount: document.querySelector("#clearAccount"),
-  changeDestination: document.querySelector("#changeDestination"),
-  destinationHelp: document.querySelector("#destinationHelp"),
   loginExport: document.querySelector("#loginExport"),
   stopWorkflow: document.querySelector("#stopWorkflow"),
   togglePassword: document.querySelector("#togglePassword"),
 };
 
-const LOGIN_BUTTON_LABEL = "Login & Export";
+const LOGIN_BUTTON_LABEL = "Login";
 const PROCESSING_STATUSES = new Set([
   "Processing...",
   "Starting login workflow",
@@ -29,11 +20,19 @@ const PROCESSING_STATUSES = new Set([
   "Waiting for TOTP form",
   "Generating TOTP",
   "Already logged in",
+  "Extracting avatar data",
+  "Opening incognito X",
+  "Waiting for X to load",
   "Waiting for session cookies",
   "Exporting Cookies",
+  "Uploading Cookies",
+  "Closing incognito window",
   "Stopping...",
 ]);
 let activeTabIsX = false;
+let activeTabIsAvatar = false;
+let avatarUploadTarget = null;
+let challengeEmail = "";
 let isWorking = false;
 
 function field(id) {
@@ -45,16 +44,17 @@ function setStatus(message, tone = "") {
   elements.status.className = `status ${tone}`.trim();
 }
 
+function idleLoginButtonLabel() {
+  return LOGIN_BUTTON_LABEL;
+}
+
 function setBusy(isBusy) {
   isWorking = isBusy;
-  elements.loginExport.textContent = isBusy ? "Processing..." : LOGIN_BUTTON_LABEL;
+  elements.loginExport.textContent = isBusy ? "Processing..." : idleLoginButtonLabel();
   elements.stopWorkflow.hidden = !isBusy;
   elements.stopWorkflow.style.display = isBusy ? "block" : "none";
   elements.stopWorkflow.disabled = false;
   updateLoginAvailability();
-  elements.saveAccount.disabled = isBusy;
-  elements.clearAccount.disabled = isBusy;
-  elements.changeDestination.disabled = isBusy;
   elements.togglePassword.disabled = isBusy;
 }
 
@@ -87,15 +87,22 @@ function getMissingRequiredFields() {
 
 function updateLoginAvailability({ updateStatus = true } = {}) {
   const missingFields = getMissingRequiredFields();
-  const canLogin = activeTabIsX && missingFields.length === 0 && !isWorking;
+  const avatarUploadReady =
+    !activeTabIsAvatar || Boolean(avatarUploadTarget?.avatarId && avatarUploadTarget?.apiBaseUrl && avatarUploadTarget?.authToken);
+  const canLogin = (activeTabIsX || activeTabIsAvatar) && missingFields.length === 0 && avatarUploadReady && !isWorking;
   elements.loginExport.disabled = !canLogin;
 
   if (!updateStatus || isWorking) {
     return;
   }
 
+  if (activeTabIsAvatar) {
+    setStatus(missingFields.length || !avatarUploadReady ? "Reading avatar account data..." : "Ready to login.");
+    return;
+  }
+
   if (!activeTabIsX) {
-    setStatus("Open x.com to enable Login & Export.", "error");
+    setStatus("Open x.com or an avatar detail page to continue.", "error");
     return;
   }
 
@@ -121,115 +128,61 @@ function isXTab(tab) {
   return /^https:\/\/([^/]+\.)?(x|twitter)\.com\//i.test(tab?.url || "");
 }
 
-function setTabState(isX) {
+function isAvatarTab(tab) {
+  try {
+    const url = new URL(tab?.url || "");
+    return /^\/avatars\/[^/]+\/?$/i.test(url.pathname);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function setTabState(tab) {
+  const isX = isXTab(tab);
+  const isAvatar = isAvatarTab(tab);
   activeTabIsX = isX;
+  activeTabIsAvatar = isAvatar;
+  if (!isAvatar) {
+    avatarUploadTarget = null;
+  }
 
   if (isX) {
     elements.tabBadge.textContent = "x.com";
     elements.tabBadge.className = "badge ok";
+    elements.loginExport.textContent = isWorking ? "Processing..." : idleLoginButtonLabel();
     updateLoginAvailability();
     return;
   }
 
-  elements.tabBadge.textContent = "No X tab";
+  if (isAvatar) {
+    elements.tabBadge.textContent = "Avatar";
+    elements.tabBadge.className = "badge ok";
+    elements.loginExport.textContent = isWorking ? "Processing..." : idleLoginButtonLabel();
+    updateLoginAvailability();
+    return;
+  }
+
+  elements.tabBadge.textContent = "Unsupported";
   elements.tabBadge.className = "badge error";
+  elements.loginExport.textContent = isWorking ? "Processing..." : idleLoginButtonLabel();
   updateLoginAvailability();
 }
 
 async function refreshTabState() {
   const tab = await getActiveTab();
-  setTabState(isXTab(tab));
+  setTabState(tab);
+  if (activeTabIsAvatar && !isWorking) {
+    await loadAvatarAccountFromTab(tab);
+  }
   return tab;
-}
-
-function openDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(DB_STORE);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-  });
-}
-
-async function idbGet(key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(DB_STORE, "readonly");
-    const request = tx.objectStore(DB_STORE).get(key);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result || null);
-  });
-}
-
-async function idbSet(key, value) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(DB_STORE, "readwrite");
-    tx.objectStore(DB_STORE).put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function getStoredDestination() {
-  return idbGet(DESTINATION_KEY);
-}
-
-async function ensureDestinationPermission(handle) {
-  if (!handle) return false;
-  const options = { mode: "readwrite" };
-  if ((await handle.queryPermission(options)) === "granted") return true;
-  return (await handle.requestPermission(options)) === "granted";
-}
-
-async function changeDestination() {
-  if (!window.showDirectoryPicker) {
-    throw new Error("Folder selection is not available in this browser.");
-  }
-
-  const handle = await window.showDirectoryPicker({ mode: "readwrite" });
-  await idbSet(DESTINATION_KEY, handle);
-  await chrome.storage.local.set({ exportDestinationName: handle.name });
-  elements.destinationName.textContent = handle.name;
-  elements.destinationHelp.textContent = "Custom destination selected. Exports will be saved to this folder.";
-  setStatus(`Destination changed: ${handle.name}`, "success");
-}
-
-async function downloadJsonFile(fileName, data) {
-  const payload = JSON.stringify(data, null, 2);
-  const url = `data:application/json;charset=utf-8,${encodeURIComponent(payload)}`;
-  await chrome.downloads.download({
-    url,
-    filename: fileName,
-    saveAs: false,
-    conflictAction: "overwrite",
-  });
-}
-
-async function writeJsonFile(handle, fileName, data) {
-  const fileHandle = await handle.getFileHandle(fileName, { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(JSON.stringify(data, null, 2));
-  await writable.close();
-}
-
-async function saveJsonFile(fileName, data) {
-  const destination = await getStoredDestination();
-  if (destination && (await ensureDestinationPermission(destination))) {
-    await writeJsonFile(destination, fileName, data);
-    return destination.name;
-  }
-
-  await downloadJsonFile(fileName, data);
-  return "Downloads";
 }
 
 async function clearAccountData() {
   await chrome.storage.local.remove("account");
+  challengeEmail = "";
   for (const key of accountFields) {
     field(key).value = "";
   }
-  elements.downloadName.textContent = "username.json";
   updateLoginAvailability({ updateStatus: false });
 }
 
@@ -254,36 +207,228 @@ async function exportCookies() {
   return response;
 }
 
+function extractAvatarAccountFromPage() {
+  const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const jwtPattern = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
+  const pageText = document.body?.innerText || document.body?.textContent || "";
+  const lines = pageText
+    .split(/\r?\n/)
+    .map(normalize)
+    .filter(Boolean);
+
+  function valueByLabel(labels) {
+    const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const inline = new RegExp(`^(?:${escaped})\\s*:?[\\s\\u00a0]*(.+)$`, "i");
+    const joined = lines.join("\n");
+    const joinedMatch = joined.match(new RegExp(`(?:^|\\n)(?:${escaped})\\s*:?[\\s\\u00a0]*([^\\n]+)`, "i"));
+    if (joinedMatch?.[1]) return normalize(joinedMatch[1]);
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const match = line.match(inline);
+      if (match?.[1]) return normalize(match[1]);
+      if (labels.some((label) => line.toLowerCase() === label.toLowerCase())) {
+        const next = lines[index + 1] || "";
+        if (next === ":") return normalize(lines[index + 2] || "");
+        if (next) return normalize(next.replace(/^:\s*/, ""));
+      }
+    }
+
+    return "";
+  }
+
+  function storageEntries(storage) {
+    const entries = [];
+    try {
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index);
+        entries.push([key, storage.getItem(key)]);
+      }
+    } catch (_error) {
+      // Some pages can block storage reads; keep extraction best-effort.
+    }
+    return entries;
+  }
+
+  function authTokenFromPage() {
+    const entries = [...storageEntries(localStorage), ...storageEntries(sessionStorage)];
+    const preferred = entries.find(([key, value]) => /auth|access|token|jwt/i.test(key || "") && jwtPattern.test(value || ""));
+    const fallback = preferred || entries.find(([, value]) => jwtPattern.test(value || ""));
+    const token = fallback?.[1]?.match(jwtPattern)?.[0] || "";
+    return token.replace(/^Bearer\s+/i, "");
+  }
+
+  function apiBaseFromPage() {
+    const candidates = [];
+    const addCandidate = (value) => {
+      const text = String(value || "");
+      const matches = text.match(/https?:\/\/[^\s"'<>\\]+/g) || [];
+      for (const match of matches) {
+        try {
+          const url = new URL(match);
+          if (/\/api(?:\/v\d+)?\//i.test(url.pathname)) {
+            candidates.push(url.origin);
+          }
+        } catch (_error) {
+          // Ignore malformed embedded URLs.
+        }
+      }
+    };
+
+    try {
+      for (const entry of performance.getEntriesByType("resource")) {
+        addCandidate(entry.name);
+      }
+    } catch (_error) {
+      // Performance entries are best-effort only.
+    }
+
+    for (const [, value] of [...storageEntries(localStorage), ...storageEntries(sessionStorage)]) {
+      addCandidate(value);
+    }
+
+    return candidates[0] || location.origin;
+  }
+
+  function avatarIdFromUrl() {
+    const match = location.pathname.match(/^\/avatars\/([^/]+)\/?$/i);
+    return match?.[1] || "";
+  }
+
+  function usernameFromPage() {
+    const activeMatch = pageText.match(/([A-Za-z0-9_]{3,32})\s+Aktif\b/i);
+    if (activeMatch?.[1]) return activeMatch[1];
+
+    const heading = [...document.querySelectorAll("h1, h2, h3, strong")]
+      .map((element) => normalize(element.innerText || element.textContent))
+      .find((text) => /^[A-Za-z0-9_]{3,32}$/.test(text));
+    if (heading) return heading;
+
+    return (
+      lines.find(
+        (line) =>
+          /^[A-Za-z0-9_]{3,32}$/.test(line) &&
+          !/^(avatar|detail|aktif|kembali|twitter|password|2fa|agent|new)$/i.test(line),
+      ) || ""
+    );
+  }
+
+  return {
+    username: usernameFromPage(),
+    password: valueByLabel(["Password", "Kata Sandi"]),
+    totpSecret: valueByLabel(["2FA", "TOTP", "TOTP Secret", "Two Factor"]),
+    email: valueByLabel(["Email", "Alamat Email"]),
+    uploadTarget: {
+      avatarId: avatarIdFromUrl(),
+      apiBaseUrl: apiBaseFromPage(),
+      authToken: authTokenFromPage(),
+    },
+  };
+}
+
+async function getAvatarAccountFromTab(tabId) {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: extractAvatarAccountFromPage,
+  });
+  return result?.result || {};
+}
+
+function applyAccountToForm(account) {
+  for (const key of accountFields) {
+    field(key).value = account[key] || "";
+  }
+}
+
+async function loadAvatarAccountFromTab(tab) {
+  try {
+    setStatus("Reading avatar account data...");
+    const { uploadTarget, ...account } = await getAvatarAccountFromTab(tab.id);
+    avatarUploadTarget = uploadTarget || null;
+    challengeEmail = account.email || "";
+    applyAccountToForm(account);
+    const accountError = validateAccount(account);
+    if (accountError) {
+      setStatus(accountError, "error");
+      updateLoginAvailability({ updateStatus: false });
+      return;
+    }
+    if (!avatarUploadTarget?.avatarId) {
+      setStatus("Avatar ID not found.", "error");
+      updateLoginAvailability({ updateStatus: false });
+      return;
+    }
+    if (!avatarUploadTarget?.apiBaseUrl) {
+      setStatus("Avatar API URL not found.", "error");
+      updateLoginAvailability({ updateStatus: false });
+      return;
+    }
+    if (!avatarUploadTarget?.authToken) {
+      setStatus("Authorization token not found.", "error");
+      updateLoginAvailability({ updateStatus: false });
+      return;
+    }
+    updateLoginAvailability({ updateStatus: false });
+    setStatus("Ready to login.");
+  } catch (error) {
+    setStatus(error?.message || "Failed to read avatar data.", "error");
+    updateLoginAvailability({ updateStatus: false });
+  }
+}
+
 async function loginAndExport() {
   const tab = await refreshTabState();
-  if (!activeTabIsX) {
+  if (!activeTabIsX && !activeTabIsAvatar) {
     return;
   }
 
-  const account = getAccountFromForm();
+  let account = getAccountFromForm();
+  if (challengeEmail) {
+    account = { ...account, email: challengeEmail };
+  }
+  const messageType = activeTabIsAvatar ? "AUTHX_START_AVATAR_WORKFLOW" : "AUTHX_START_WORKFLOW";
+
   const accountError = validateAccount(account);
   if (accountError) {
     setStatus(accountError, "error");
+    if (activeTabIsAvatar) {
+      isWorking = false;
+      elements.loginExport.textContent = idleLoginButtonLabel();
+      elements.stopWorkflow.hidden = true;
+      elements.stopWorkflow.style.display = "none";
+      elements.stopWorkflow.disabled = false;
+      elements.togglePassword.disabled = false;
+    }
     return;
   }
 
-  setBusy(true);
+  if (
+    activeTabIsAvatar &&
+    !(avatarUploadTarget?.avatarId && avatarUploadTarget?.apiBaseUrl && avatarUploadTarget?.authToken)
+  ) {
+    setStatus("Avatar upload target not ready.", "error");
+    return;
+  }
+
+  if (!isWorking) setBusy(true);
   try {
     setStatus("Processing...");
     await chrome.storage.local.set({ account });
-    const response = await chrome.runtime.sendMessage({ type: "AUTHX_START_WORKFLOW", tabId: tab.id, account });
+    const response = await chrome.runtime.sendMessage({
+      type: messageType,
+      tabId: tab.id,
+      account,
+      uploadTarget: activeTabIsAvatar ? avatarUploadTarget : null,
+    });
     if (!response?.ok) {
       throw new Error(response?.error || "Failed to start AuthX workflow.");
     }
   } catch (error) {
-    elements.loginExport.textContent = LOGIN_BUTTON_LABEL;
+    elements.loginExport.textContent = idleLoginButtonLabel();
     elements.stopWorkflow.hidden = true;
     elements.stopWorkflow.style.display = "none";
     elements.stopWorkflow.disabled = false;
     isWorking = false;
-    elements.saveAccount.disabled = false;
-    elements.clearAccount.disabled = false;
-    elements.changeDestination.disabled = false;
     elements.togglePassword.disabled = false;
     updateLoginAvailability({ updateStatus: false });
     setStatus(error?.message || "Cookie export failed.", "error");
@@ -302,25 +447,20 @@ async function stopWorkflow() {
 }
 
 async function loadSavedState() {
-  const { account = {}, exportDestinationName = "", authxJob = null } = await chrome.storage.local.get([
+  const { account = {}, authxJob = null } = await chrome.storage.local.get([
     "account",
-    "exportDestinationName",
     "authxJob",
   ]);
+  challengeEmail = account.email || "";
   for (const key of accountFields) {
     field(key).value = account[key] || "";
   }
-  elements.destinationName.textContent = exportDestinationName || "Downloads";
-  elements.destinationHelp.textContent = exportDestinationName
-    ? "Custom destination selected. Exports will be saved to this folder."
-    : "Default destination: Downloads. Use Change to export to a custom folder.";
-  elements.downloadName.textContent = account.username ? `${account.username}.json` : "username.json";
 
   await refreshTabState();
   if (authxJob?.status) {
     if (authxJob.status.startsWith("Finish:") && !account.username) {
       await chrome.storage.local.remove("authxJob");
-      elements.loginExport.textContent = LOGIN_BUTTON_LABEL;
+      elements.loginExport.textContent = idleLoginButtonLabel();
       updateLoginAvailability();
       return;
     }
@@ -337,9 +477,6 @@ async function handleJobStatus(status, tone = "") {
     elements.stopWorkflow.hidden = false;
     elements.stopWorkflow.style.display = "block";
     elements.stopWorkflow.disabled = false;
-    elements.saveAccount.disabled = true;
-    elements.clearAccount.disabled = true;
-    elements.changeDestination.disabled = true;
     elements.togglePassword.disabled = true;
     updateLoginAvailability({ updateStatus: false });
     return;
@@ -353,9 +490,6 @@ async function handleJobStatus(status, tone = "") {
     elements.stopWorkflow.hidden = true;
     elements.stopWorkflow.style.display = "none";
     elements.stopWorkflow.disabled = false;
-    elements.saveAccount.disabled = false;
-    elements.clearAccount.disabled = false;
-    elements.changeDestination.disabled = false;
     elements.togglePassword.disabled = false;
     updateLoginAvailability({ updateStatus: false });
     return;
@@ -363,13 +497,10 @@ async function handleJobStatus(status, tone = "") {
 
   if (tone === "error") {
     isWorking = false;
-    elements.loginExport.textContent = LOGIN_BUTTON_LABEL;
+    elements.loginExport.textContent = idleLoginButtonLabel();
     elements.stopWorkflow.hidden = true;
     elements.stopWorkflow.style.display = "none";
     elements.stopWorkflow.disabled = false;
-    elements.saveAccount.disabled = false;
-    elements.clearAccount.disabled = false;
-    elements.changeDestination.disabled = false;
     elements.togglePassword.disabled = false;
     updateLoginAvailability({ updateStatus: false });
   }
@@ -381,23 +512,6 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-elements.saveAccount.addEventListener("click", async () => {
-  const account = getAccountFromForm();
-  const accountError = validateAccount(account);
-  if (accountError) {
-    setStatus(accountError, "error");
-    return;
-  }
-  await chrome.storage.local.set({ account });
-  setStatus("Account saved.", "success");
-});
-
-elements.clearAccount.addEventListener("click", async () => {
-  await clearAccountData();
-  elements.loginExport.textContent = LOGIN_BUTTON_LABEL;
-  setStatus("Account deleted.", "success");
-});
-
 elements.loginExport.addEventListener("click", () => {
   loginAndExport();
 });
@@ -406,19 +520,13 @@ elements.stopWorkflow.addEventListener("click", () => {
   stopWorkflow();
 });
 
-elements.changeDestination.addEventListener("click", () => {
-  changeDestination().catch((error) => setStatus(error?.message || "Destination change failed.", "error"));
-});
-
 elements.togglePassword.addEventListener("click", () => {
   setPasswordVisible(field("password").type === "password");
 });
 
 field("username").addEventListener("input", () => {
-  const username = field("username").value.trim();
-  elements.downloadName.textContent = username ? `${username}.json` : "username.json";
   if (!isWorking && elements.loginExport.textContent === "Finish") {
-    elements.loginExport.textContent = LOGIN_BUTTON_LABEL;
+    elements.loginExport.textContent = idleLoginButtonLabel();
   }
   updateLoginAvailability();
 });
@@ -426,7 +534,7 @@ field("username").addEventListener("input", () => {
 for (const key of ["password", "totpSecret"]) {
   field(key).addEventListener("input", () => {
     if (!isWorking && elements.loginExport.textContent === "Finish") {
-      elements.loginExport.textContent = LOGIN_BUTTON_LABEL;
+      elements.loginExport.textContent = idleLoginButtonLabel();
     }
     updateLoginAvailability();
   });

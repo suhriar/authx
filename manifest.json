@@ -24,10 +24,13 @@
     "storage",
     "cookies",
     "tabs",
+    "activeTab",
     "scripting",
     "downloads"
   ],
   "host_permissions": [
+    "http://*/*",
+    "https://*/*",
     "https://x.com/*",
     "https://*.x.com/*",
     "https://twitter.com/*",

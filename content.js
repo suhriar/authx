@@ -407,6 +407,11 @@
         continue;
       }
 
+      if (state === "username" && lastSubmittedStep === "username" && !email) {
+        await sleep(500);
+        continue;
+      }
+
       if (state === "username" || state === "unknown") {
         update("Entering Username");
         const filled = await fillFirst(usernameSelectors, username);

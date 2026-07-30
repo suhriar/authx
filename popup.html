@@ -54,39 +54,12 @@
           TOTP Secret
           <input id="totpSecret" name="totpSecret" autocomplete="off" spellcheck="false" placeholder="FBTSCVXXXXXXXXXXXX">
         </label>
-        <details>
-          <summary>Additional challenge fields</summary>
-          <label class="details-field">
-            Email
-            <input id="email" name="email" autocomplete="email" placeholder="Optional">
-          </label>
-        </details>
-        <div class="toolbar">
-          <button id="saveAccount" type="button">Save</button>
-          <button id="clearAccount" class="secondary" type="button">Delete</button>
-        </div>
-      </section>
-
-      <section class="section">
-        <div class="section-title">
-          <h2>Export</h2>
-          <span>Destination</span>
-        </div>
-        <div class="export-card">
-          <div class="export-icon" aria-hidden="true">JSON</div>
-          <div>
-            <strong id="destinationName">Downloads</strong>
-            <span id="downloadName">username.json</span>
-          </div>
-          <button id="changeDestination" class="secondary small-button" type="button">Change</button>
-        </div>
-        <p class="helper-text" id="destinationHelp">Default destination: Downloads. Use Change to export to a custom folder.</p>
       </section>
 
       <section class="status-section">
         <div class="status" id="status">Ready</div>
         <div class="workflow-actions">
-          <button id="loginExport" class="primary full" type="button">Login & Export</button>
+          <button id="loginExport" class="primary full" type="button">Login</button>
           <button id="stopWorkflow" class="danger-button full" type="button" hidden>Stop</button>
         </div>
       </section>

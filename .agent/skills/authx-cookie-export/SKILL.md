@@ -1,6 +1,6 @@
 ---
 name: authx-cookie-export
-description: Maintain AuthX background cookie export behavior, including background.js workflow orchestration, active-tab cookie-store selection for normal/incognito sessions, x.com/twitter.com cookie collection, required auth_token and ct0 validation, Downloads fallback, custom folder export, status broadcasts, cancellation, and popup-closed continuity. Use when changing cookie export, session validation, destination handling, or background workflow completion.
+description: Maintain AuthX background cookie export behavior, including background.js workflow orchestration, incognito X window creation for avatar workflows, active-tab cookie-store selection for normal/incognito sessions, x.com/twitter.com cookie collection, required auth_token and ct0 validation, Downloads fallback, custom folder export, status broadcasts, cancellation, incognito window close after export, and popup-closed continuity. Use when changing cookie export, session validation, destination handling, avatar export completion, or background workflow completion.
 ---
 
 # AuthX Cookie Export
@@ -26,6 +26,7 @@ Use this skill before changing cookie export or background workflow completion.
 
 - Collect cookies from `https://x.com` and `https://twitter.com`.
 - Resolve the cookie store from the active login tab's `tabId`; incognito workflows must use the incognito `storeId`.
+- Avatar-driven workflows open an incognito `x.com` window, clear X/Twitter cookies in that incognito store, wait for X to settle, run the standard login/export flow, and close that window only after export succeeds.
 - Require `auth_token` and `ct0` before declaring success.
 - Export all available cookies, not only required cookies.
 - Transform cookie records into simple name/value JSON.

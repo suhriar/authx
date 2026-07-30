@@ -4,7 +4,7 @@ This file is for future agents or maintainers working on AuthX. Use it as the qu
 
 ## Project Summary
 
-AuthX is a vanilla Manifest V3 Chrome Extension for automating X/Twitter login and exporting authenticated cookies as `<username>.json`.
+AuthX is a vanilla Manifest V3 Chrome Extension for automating X/Twitter login and exporting authenticated cookies as `<username>.json`. It can start from `x.com` directly or from an avatar detail page at any domain whose path matches `/avatars/<id>`.
 
 There is no build step. The extension is loaded directly from this folder through `chrome://extensions` using **Load unpacked**.
 
@@ -20,8 +20,8 @@ Core rules:
 - `manifest.json`: Extension metadata, permissions, host permissions, popup, background service worker, and content scripts.
 - `popup.html`: Popup structure for account, export destination, status, and workflow controls.
 - `popup.css`: Popup styling, including the password eye toggle.
-- `popup.js`: Popup state, account storage, active-tab validation, password visibility toggle, destination selection, and workflow start/stop.
-- `background.js`: Workflow orchestration, active-tab cookie-store selection, content-script messaging, cookie waiting, cookie export, status broadcast, and cancellation handling.
+- `popup.js`: Popup state, account storage, active-tab/avatar-page validation, avatar credential extraction, password visibility toggle, destination selection, and workflow start/stop.
+- `background.js`: Workflow orchestration, incognito X window creation, active-tab cookie-store selection, content-script messaging, cookie waiting, cookie export, incognito window close, status broadcast, and cancellation handling.
 - `content.js`: X/Twitter page automation, state detection, form filling, password-dialog validation, TOTP-form waiting, OTP entry, and cancellation checks.
 - `totp.js`: Local RFC 6238 TOTP generation with Web Crypto.
 - `README.md`: User-facing setup, usage, and security notes.
@@ -64,6 +64,19 @@ Popup starts workflow
   -> export cookies
 ```
 
+Avatar workflow:
+
+```text
+Popup starts from /avatars/<id>
+  -> popup.js extracts username/password/2FA from the active page
+  -> background.js opens x.com in an incognito window
+  -> background.js clears X/Twitter cookies in that incognito store
+  -> background.js waits for x.com to settle before starting login automation
+  -> standard content.js login automation runs in the incognito tab
+  -> background.js exports cookies from the incognito tab's cookie store
+  -> background.js closes the incognito window after successful export
+```
+
 ## Sensitive Areas
 
 ### X Selectors
@@ -76,6 +89,7 @@ Before changing broad selectors:
 - Keep selectors scoped to the active form/dialog when possible.
 - Avoid assuming a single page layout.
 - Do not treat every visible text input as username after password has been submitted.
+- Do not retry the username step immediately after username submit while the password dialog is still loading.
 
 Important functions:
 
@@ -132,6 +146,7 @@ Maintenance expectations:
 Required popup behavior:
 
 - Disable login unless the active tab is X/Twitter and username/password/TOTP secret are present.
+- Enable avatar import/export when the active tab path matches `/avatars/<id>`, even before fields are filled.
 - Disable editing controls while workflow is running.
 - Show `Stop` only during active workflow.
 - Keep the password eye toggle local to the popup input.
