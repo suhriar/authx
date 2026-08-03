@@ -102,7 +102,7 @@ function updateLoginAvailability({ updateStatus = true } = {}) {
   }
 
   if (!activeTabIsX) {
-    setStatus("Open x.com or an avatar detail page to continue.", "error");
+    setStatus("Open an avatar detail page to continue.", "error");
     return;
   }
 
