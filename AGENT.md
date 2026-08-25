@@ -4,7 +4,7 @@ This file is for future agents or maintainers working on AuthX. Use it as the qu
 
 ## Project Summary
 
-AuthX is a vanilla Manifest V3 Chrome Extension for automating X/Twitter login and exporting authenticated cookies as `<username>.json`. It can start from `x.com` directly or from an avatar detail page at any domain whose path matches `/avatars/<id>`.
+AuthX is a vanilla Manifest V3 Chrome Extension for automating X/Twitter login and exporting authenticated cookies as `<username>.json`. It can start from `x.com` directly, from an avatar detail page at any domain whose path matches `/avatars/<id>`, or from an avatar list page whose path matches `/avatars`.
 
 There is no build step. The extension is loaded directly from this folder through `chrome://extensions` using **Load unpacked**.
 
@@ -77,6 +77,20 @@ Popup starts from /avatars/<id>
   -> background.js closes the incognito window after successful export
 ```
 
+Avatar list workflow:
+
+```text
+Popup starts from /avatars?... list page
+  -> user pastes usernames into the popup Batch Usernames textarea
+  -> popup.js sends the parsed username list to background.js
+  -> background.js navigates to /avatars?page=1&search=<username> for each username
+  -> background.js clicks the matching visible tr.cursor-pointer result row
+  -> source tab opens that avatar detail page
+  -> background.js extracts username/password/2FA from the detail page
+  -> background.js runs the standard incognito avatar login/export flow
+  -> batch continues until all pasted usernames are processed
+```
+
 ## Sensitive Areas
 
 ### X Selectors
@@ -147,6 +161,7 @@ Required popup behavior:
 
 - Disable login unless the active tab is X/Twitter and username/password/TOTP secret are present.
 - Enable avatar import/export when the active tab path matches `/avatars/<id>`, even before fields are filled.
+- Enable batch login when the active tab path matches `/avatars` and the popup username list is not empty.
 - Disable editing controls while workflow is running.
 - Show `Stop` only during active workflow.
 - Keep the password eye toggle local to the popup input.

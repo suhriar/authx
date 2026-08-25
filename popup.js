@@ -7,11 +7,17 @@ const elements = {
   loginExport: document.querySelector("#loginExport"),
   stopWorkflow: document.querySelector("#stopWorkflow"),
   togglePassword: document.querySelector("#togglePassword"),
+  batchSection: document.querySelector("#batchSection"),
+  batchUsernames: document.querySelector("#batchUsernames"),
+  batchCount: document.querySelector("#batchCount"),
 };
 
 const LOGIN_BUTTON_LABEL = "Login";
 const PROCESSING_STATUSES = new Set([
   "Processing...",
+  "Searching avatar",
+  "Opening avatar detail",
+  "Reading avatar detail",
   "Starting login workflow",
   "Opening login",
   "Entering Username",
@@ -31,6 +37,7 @@ const PROCESSING_STATUSES = new Set([
 ]);
 let activeTabIsX = false;
 let activeTabIsAvatar = false;
+let activeTabIsAvatarList = false;
 let avatarUploadTarget = null;
 let challengeEmail = "";
 let isWorking = false;
@@ -45,7 +52,7 @@ function setStatus(message, tone = "") {
 }
 
 function idleLoginButtonLabel() {
-  return LOGIN_BUTTON_LABEL;
+  return activeTabIsAvatarList ? "Batch Login" : LOGIN_BUTTON_LABEL;
 }
 
 function setBusy(isBusy) {
@@ -85,11 +92,30 @@ function getMissingRequiredFields() {
   return ["username", "password", "totpSecret"].filter((key) => !account[key]);
 }
 
+function getBatchUsernames() {
+  return (elements.batchUsernames?.value || "")
+    .split(/[\s,]+/)
+    .map((username) => username.trim().replace(/^@/, ""))
+    .filter(Boolean);
+}
+
+function updateBatchCount() {
+  const count = getBatchUsernames().length;
+  if (elements.batchCount) {
+    elements.batchCount.textContent = `${count} ${count === 1 ? "name" : "names"}`;
+  }
+  return count;
+}
+
 function updateLoginAvailability({ updateStatus = true } = {}) {
   const missingFields = getMissingRequiredFields();
   const avatarUploadReady =
     !activeTabIsAvatar || Boolean(avatarUploadTarget?.avatarId && avatarUploadTarget?.apiBaseUrl && avatarUploadTarget?.authToken);
-  const canLogin = (activeTabIsX || activeTabIsAvatar) && missingFields.length === 0 && avatarUploadReady && !isWorking;
+  const batchCount = updateBatchCount();
+  const avatarListReady = !activeTabIsAvatarList || batchCount > 0;
+  const canLogin = activeTabIsAvatarList
+    ? avatarListReady && !isWorking
+    : (activeTabIsX || activeTabIsAvatar) && missingFields.length === 0 && avatarUploadReady && !isWorking;
   elements.loginExport.disabled = !canLogin;
 
   if (!updateStatus || isWorking) {
@@ -98,6 +124,11 @@ function updateLoginAvailability({ updateStatus = true } = {}) {
 
   if (activeTabIsAvatar) {
     setStatus(missingFields.length || !avatarUploadReady ? "Reading avatar account data..." : "Ready to login.");
+    return;
+  }
+
+  if (activeTabIsAvatarList) {
+    setStatus(avatarListReady ? `Ready to search ${batchCount} username(s).` : "Paste username list to continue.", avatarListReady ? "" : "error");
     return;
   }
 
@@ -137,13 +168,29 @@ function isAvatarTab(tab) {
   }
 }
 
+function isAvatarListTab(tab) {
+  try {
+    const url = new URL(tab?.url || "");
+    return /^\/avatars\/?$/i.test(url.pathname);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function setTabState(tab) {
   const isX = isXTab(tab);
   const isAvatar = isAvatarTab(tab);
+  const isAvatarList = isAvatarListTab(tab);
   activeTabIsX = isX;
   activeTabIsAvatar = isAvatar;
+  activeTabIsAvatarList = isAvatarList;
   if (!isAvatar) {
     avatarUploadTarget = null;
+  }
+  if (!isAvatarList) {
+    elements.batchSection.hidden = true;
+  } else {
+    elements.batchSection.hidden = false;
   }
 
   if (isX) {
@@ -162,6 +209,14 @@ function setTabState(tab) {
     return;
   }
 
+  if (isAvatarList) {
+    elements.tabBadge.textContent = "Avatar List";
+    elements.tabBadge.className = "badge ok";
+    elements.loginExport.textContent = isWorking ? "Processing..." : idleLoginButtonLabel();
+    updateLoginAvailability();
+    return;
+  }
+
   elements.tabBadge.textContent = "Unsupported";
   elements.tabBadge.className = "badge error";
   elements.loginExport.textContent = isWorking ? "Processing..." : idleLoginButtonLabel();
@@ -173,6 +228,9 @@ async function refreshTabState() {
   setTabState(tab);
   if (activeTabIsAvatar && !isWorking) {
     await loadAvatarAccountFromTab(tab);
+  }
+  if (activeTabIsAvatarList && !isWorking) {
+    updateLoginAvailability();
   }
   return tab;
 }
@@ -209,6 +267,7 @@ async function exportCookies() {
 
 function extractAvatarAccountFromPage() {
   const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const handlePattern = /[A-Za-z0-9._]{3,32}/;
   const jwtPattern = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
   const pageText = document.body?.innerText || document.body?.textContent || "";
   const lines = pageText
@@ -296,18 +355,18 @@ function extractAvatarAccountFromPage() {
   }
 
   function usernameFromPage() {
-    const activeMatch = pageText.match(/([A-Za-z0-9_]{3,32})\s+Aktif\b/i);
+    const activeMatch = pageText.match(new RegExp(`(${handlePattern.source})\\s+Aktif\\b`, "i"));
     if (activeMatch?.[1]) return activeMatch[1];
 
     const heading = [...document.querySelectorAll("h1, h2, h3, strong")]
       .map((element) => normalize(element.innerText || element.textContent))
-      .find((text) => /^[A-Za-z0-9_]{3,32}$/.test(text));
+      .find((text) => new RegExp(`^${handlePattern.source}$`).test(text));
     if (heading) return heading;
 
     return (
       lines.find(
         (line) =>
-          /^[A-Za-z0-9_]{3,32}$/.test(line) &&
+          new RegExp(`^${handlePattern.source}$`).test(line) &&
           !/^(avatar|detail|aktif|kembali|twitter|password|2fa|agent|new)$/i.test(line),
       ) || ""
     );
@@ -378,7 +437,7 @@ async function loadAvatarAccountFromTab(tab) {
 
 async function loginAndExport() {
   const tab = await refreshTabState();
-  if (!activeTabIsX && !activeTabIsAvatar) {
+  if (!activeTabIsX && !activeTabIsAvatar && !activeTabIsAvatarList) {
     return;
   }
 
@@ -386,9 +445,13 @@ async function loginAndExport() {
   if (challengeEmail) {
     account = { ...account, email: challengeEmail };
   }
-  const messageType = activeTabIsAvatar ? "AUTHX_START_AVATAR_WORKFLOW" : "AUTHX_START_WORKFLOW";
+  const messageType = activeTabIsAvatarList
+    ? "AUTHX_START_AVATAR_BATCH_WORKFLOW"
+    : activeTabIsAvatar
+      ? "AUTHX_START_AVATAR_WORKFLOW"
+      : "AUTHX_START_WORKFLOW";
 
-  const accountError = validateAccount(account);
+  const accountError = activeTabIsAvatarList ? "" : validateAccount(account);
   if (accountError) {
     setStatus(accountError, "error");
     if (activeTabIsAvatar) {
@@ -399,6 +462,12 @@ async function loginAndExport() {
       elements.stopWorkflow.disabled = false;
       elements.togglePassword.disabled = false;
     }
+    return;
+  }
+
+  const batchUsernames = activeTabIsAvatarList ? getBatchUsernames() : [];
+  if (activeTabIsAvatarList && batchUsernames.length === 0) {
+    setStatus("Paste username list to continue.", "error");
     return;
   }
 
@@ -413,12 +482,13 @@ async function loginAndExport() {
   if (!isWorking) setBusy(true);
   try {
     setStatus("Processing...");
-    await chrome.storage.local.set({ account });
+    await chrome.storage.local.set({ account: activeTabIsAvatarList ? {} : account });
     const response = await chrome.runtime.sendMessage({
       type: messageType,
       tabId: tab.id,
-      account,
+      account: activeTabIsAvatarList ? null : account,
       uploadTarget: activeTabIsAvatar ? avatarUploadTarget : null,
+      batchUsernames: activeTabIsAvatarList ? batchUsernames : [],
     });
     if (!response?.ok) {
       throw new Error(response?.error || "Failed to start AuthX workflow.");
@@ -539,5 +609,12 @@ for (const key of ["password", "totpSecret"]) {
     updateLoginAvailability();
   });
 }
+
+elements.batchUsernames.addEventListener("input", () => {
+  if (!isWorking && elements.loginExport.textContent === "Finish") {
+    elements.loginExport.textContent = idleLoginButtonLabel();
+  }
+  updateLoginAvailability();
+});
 
 loadSavedState().catch((error) => setStatus(error?.message || "AuthX failed to initialize.", "error"));

@@ -4,7 +4,7 @@
 
 AuthX is a Manifest V3 Chrome Extension for automating X (Twitter) login and exporting authenticated session cookies into a local JSON file.
 
-The workflow can start from `x.com` or from an avatar detail page at any domain using the `/avatars/<id>` path. On `x.com`, open AuthX, enter the account credentials and TOTP secret, then click **Login & Export**. On an avatar page, AuthX reads the username, password, and 2FA secret from the page, opens `x.com` in incognito, logs in, exports cookies, and closes the incognito window after the export succeeds. By default it downloads to Downloads, and the destination can be changed from the popup.
+The workflow can start from `x.com`, from an avatar detail page at any domain using the `/avatars/<id>` path, or from an avatar list page using the `/avatars?...` path. On `x.com`, open AuthX, enter the account credentials and TOTP secret, then click **Login & Export**. On an avatar page, AuthX reads the username, password, and 2FA secret from the page, opens `x.com` in incognito, logs in, exports cookies, and closes the incognito window after the export succeeds. On an avatar list page, paste usernames into the popup; AuthX searches `/avatars?page=1&search=<username>` for each one, opens the matching detail row, and runs the same incognito login/export flow. By default it downloads to Downloads, and the destination can be changed from the popup.
 
 ## References
 
@@ -18,7 +18,9 @@ The Playwright reference was adapted into browser-native extension logic. AuthX 
 - Store username, password, TOTP secret, and optional email locally.
 - Show or hide the saved password field in the popup to verify typed credentials.
 - Detect avatar detail pages with the `/avatars/<id>` path on any domain.
+- Detect avatar list pages with the `/avatars` path on any domain.
 - Import username, password, and 2FA secret from an avatar detail page.
+- Batch-process pasted avatar usernames by searching and opening one avatar detail at a time.
 - Open `x.com` in incognito for avatar-driven login/export.
 - Close the incognito window automatically after a successful export.
 - Download cookie JSON to the browser's default Downloads folder.
@@ -98,6 +100,26 @@ https://tech-86.com/avatars/f620f12-18c9-48a0-92fe-eafeae1781ea
 4. Click **Import & Export**.
 
 AuthX extracts the avatar username, password, and 2FA secret from the current page, opens `x.com` in incognito, clears X/Twitter cookies from that incognito cookie store, logs in, exports cookies from that same store, then closes the incognito window after saving `<username>.json`.
+
+## Avatar List Batch Usage
+
+1. Open an avatar list page whose path matches:
+
+```text
+/avatars
+```
+
+Example:
+
+```text
+https://tech-86.com/avatars?social_media=twitter&page=1&status=inactive&page_size=100
+```
+
+2. Open AuthX and confirm the tab badge shows `Avatar List`.
+3. Paste one username per line into **Batch Usernames**.
+4. Click **Batch Login**.
+
+AuthX searches each username with `/avatars?page=1&search=<username>`, opens the matching row, reads the avatar detail credentials, and runs the regular incognito login/export workflow before moving to the next username.
 
 On success, AuthX saves:
 
