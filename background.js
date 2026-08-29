@@ -68,6 +68,17 @@ async function setJobStatus(status, tone = "") {
   }
 }
 
+async function setBatchReport(report) {
+  const nextReport = { ...report, updatedAt: Date.now() };
+  await chrome.storage.local.set({ authxBatchReport: nextReport });
+  try {
+    await chrome.runtime.sendMessage({ type: "AUTHX_BATCH_REPORT", report: nextReport });
+  } catch (_error) {
+    // The popup may be closed while the background workflow keeps running.
+  }
+  return nextReport;
+}
+
 async function throwIfCancelled() {
   const { authxCancel = false } = await chrome.storage.local.get("authxCancel");
   if (authxCancel) {
@@ -538,41 +549,45 @@ async function runWorkflow({
 }
 
 async function runAvatarWorkflow({ account, uploadTarget }) {
-  await chrome.storage.local.set({ account, authxCancel: false });
-  await setJobStatus("Opening incognito X");
-  const tab = await openIncognitoXTab();
-  const cookieStoreId = await getCookieStoreIdForTab(tab.id);
-  await clearXCookies(cookieStoreId);
-  await setJobStatus("Waiting for X to load");
-  await chrome.tabs.update(tab.id, { url: "https://x.com" });
-  await waitForXAppSettle(tab.id);
-  return runWorkflow({
-    tabId: tab.id,
-    windowId: tab.windowId,
-    account,
-    closeWindowOnFinish: true,
-    strictAutomation: true,
-    uploadTarget,
-  });
+  try {
+    const { fileName } = await executeAvatarItemWorkflow({ account, uploadTarget });
+    await chrome.storage.local.remove("account");
+    await chrome.storage.local.remove("authxCancel");
+    await setJobStatus(`Finish: uploaded ${fileName}`, "success");
+  } catch (error) {
+    await chrome.storage.local.remove("authxCancel");
+    if (error?.authxStopped || error?.message === "Workflow stopped.") {
+      await setJobStatus("Workflow stopped.", "error");
+      return;
+    }
+    await setJobStatus(error?.message || "Cookie export failed.", "error");
+  }
 }
 
 async function executeAvatarItemWorkflow({ account, uploadTarget }) {
   await chrome.storage.local.set({ account, authxCancel: false });
   await setJobStatus("Opening incognito X");
-  const tab = await openIncognitoXTab();
-  const cookieStoreId = await getCookieStoreIdForTab(tab.id);
-  await clearXCookies(cookieStoreId);
-  await setJobStatus("Waiting for X to load");
-  await chrome.tabs.update(tab.id, { url: "https://x.com" });
-  await waitForXAppSettle(tab.id);
-  return executeLoginExport({
-    tabId: tab.id,
-    windowId: tab.windowId,
-    account,
-    closeWindowOnFinish: true,
-    strictAutomation: true,
-    uploadTarget,
-  });
+  let tab = null;
+  try {
+    tab = await openIncognitoXTab();
+    const cookieStoreId = await getCookieStoreIdForTab(tab.id);
+    await clearXCookies(cookieStoreId);
+    await chrome.tabs.update(tab.id, { url: "https://x.com" });
+    await waitForXAppSettle(tab.id);
+    return await executeLoginExport({
+      tabId: tab.id,
+      windowId: tab.windowId,
+      account,
+      closeWindowOnFinish: true,
+      strictAutomation: true,
+      uploadTarget,
+    });
+  } catch (error) {
+    if (tab?.id) {
+      await closeIncognitoTarget({ tabId: tab.id, windowId: tab.windowId });
+    }
+    throw error;
+  }
 }
 
 async function runAvatarBatchWorkflow({ tabId, batchUsernames = [] }) {
@@ -589,62 +604,84 @@ async function runAvatarBatchWorkflow({ tabId, batchUsernames = [] }) {
   const sourceTab = await chrome.tabs.get(tabId);
   const baseUrl = sourceTab.url || "";
   await chrome.storage.local.set({ authxCancel: false, account: {} });
-  let processedCount = 0;
+  let report = await setBatchReport({
+    total: usernames.length,
+    success: [],
+    failed: [],
+    startedAt: Date.now(),
+  });
 
   try {
     for (const username of usernames) {
       await throwIfCancelled();
-      await setJobStatus("Searching avatar");
-      await chrome.tabs.update(tabId, { url: avatarSearchUrl(baseUrl, username), active: true });
-      await waitForAnyTabReady(
-        tabId,
-        (tab) => {
-          try {
-            return /^\/avatars\/?$/i.test(new URL(tab.url || "").pathname);
-          } catch (_error) {
-            return false;
-          }
-        },
-        "Avatar list did not finish loading.",
-      );
-      await sleep(AVATAR_PAGE_SETTLE_MS);
+      try {
+        await setJobStatus("Searching avatar");
+        await chrome.tabs.update(tabId, { url: avatarSearchUrl(baseUrl, username), active: true });
+        await waitForAnyTabReady(
+          tabId,
+          (tab) => {
+            try {
+              return /^\/avatars\/?$/i.test(new URL(tab.url || "").pathname);
+            } catch (_error) {
+              return false;
+            }
+          },
+          "Avatar list did not finish loading.",
+        );
+        await sleep(AVATAR_PAGE_SETTLE_MS);
 
-      const snapshot = await getAvatarListContextFromTab(tabId);
-      const nextRow = (snapshot.rows || []).find((row) => row.username.toLowerCase() === username.toLowerCase());
-      if (!nextRow) {
-        throw new Error(`Avatar not found for username: ${username}`);
+        const snapshot = await getAvatarListContextFromTab(tabId);
+        const nextRow = (snapshot.rows || []).find((row) => row.username.toLowerCase() === username.toLowerCase());
+        if (!nextRow) {
+          throw new Error(`Avatar not found for username: ${username}`);
+        }
+
+        await setJobStatus("Opening avatar detail");
+        await clickAvatarRow(tabId, nextRow);
+        await waitForAnyTabReady(
+          tabId,
+          (tab) => {
+            try {
+              return /^\/avatars\/[^/]+\/?$/i.test(new URL(tab.url || "").pathname);
+            } catch (_error) {
+              return false;
+            }
+          },
+          "Avatar detail did not finish loading.",
+        );
+        await sleep(AVATAR_PAGE_SETTLE_MS);
+
+        await setJobStatus("Reading avatar detail");
+        const { uploadTarget, ...account } = await getAvatarAccountFromTab(tabId);
+        if (account.email) {
+          account.email = account.email.trim();
+        }
+        assertAvatarAccountReady(account, uploadTarget);
+
+        const { fileName } = await executeAvatarItemWorkflow({ account, uploadTarget });
+        report = await setBatchReport({
+          ...report,
+          success: [...report.success, { username, fileName }],
+        });
+      } catch (error) {
+        if (error?.authxStopped || error?.message === "Workflow stopped.") {
+          throw error;
+        }
+        const reason = error?.message || "Login failed.";
+        report = await setBatchReport({
+          ...report,
+          failed: [...report.failed, { username, reason }],
+        });
+        await setJobStatus(`Skipped ${username}: ${reason}`);
+        await sleep(1000);
+      } finally {
+        await chrome.storage.local.set({ account: {} });
       }
-
-      await setJobStatus("Opening avatar detail");
-      await clickAvatarRow(tabId, nextRow);
-      await waitForAnyTabReady(
-        tabId,
-        (tab) => {
-          try {
-            return /^\/avatars\/[^/]+\/?$/i.test(new URL(tab.url || "").pathname);
-          } catch (_error) {
-            return false;
-          }
-        },
-        "Avatar detail did not finish loading.",
-      );
-      await sleep(AVATAR_PAGE_SETTLE_MS);
-
-      await setJobStatus("Reading avatar detail");
-      const { uploadTarget, ...account } = await getAvatarAccountFromTab(tabId);
-      if (account.email) {
-        account.email = account.email.trim();
-      }
-      assertAvatarAccountReady(account, uploadTarget);
-
-      await executeAvatarItemWorkflow({ account, uploadTarget });
-      processedCount += 1;
-
-      await chrome.storage.local.set({ account: {} });
     }
 
+    report = await setBatchReport({ ...report, completedAt: Date.now() });
     await chrome.storage.local.remove(["account", "authxCancel"]);
-    await setJobStatus(`Finish: processed ${processedCount} avatar(s)`, "success");
+    await setJobStatus(`Finish: processed ${report.success.length} avatar(s), skipped ${report.failed.length}`, "success");
   } catch (error) {
     await chrome.storage.local.remove("authxCancel");
     if (error?.authxStopped || error?.message === "Workflow stopped.") {

@@ -10,6 +10,11 @@ const elements = {
   batchSection: document.querySelector("#batchSection"),
   batchUsernames: document.querySelector("#batchUsernames"),
   batchCount: document.querySelector("#batchCount"),
+  batchReportSection: document.querySelector("#batchReportSection"),
+  batchReportSummary: document.querySelector("#batchReportSummary"),
+  batchSuccessList: document.querySelector("#batchSuccessList"),
+  batchFailedList: document.querySelector("#batchFailedList"),
+  clearBatchReport: document.querySelector("#clearBatchReport"),
 };
 
 const LOGIN_BUTTON_LABEL = "Login";
@@ -107,6 +112,46 @@ function updateBatchCount() {
   return count;
 }
 
+function renderReportList(list, items, emptyLabel, itemClass) {
+  list.textContent = "";
+  if (!items.length) {
+    const emptyItem = document.createElement("li");
+    emptyItem.textContent = emptyLabel;
+    list.append(emptyItem);
+    return;
+  }
+
+  for (const item of items) {
+    const row = document.createElement("li");
+    row.className = itemClass;
+    row.textContent = item.reason ? `${item.username}: ${item.reason}` : item.username;
+    list.append(row);
+  }
+}
+
+function renderBatchReport(report = null) {
+  const success = Array.isArray(report?.success) ? report.success : [];
+  const failed = Array.isArray(report?.failed) ? report.failed : [];
+  const hasReport = Boolean(report) && (success.length > 0 || failed.length > 0 || Number.isInteger(report.total));
+
+  elements.batchReportSection.hidden = !hasReport;
+  if (!hasReport) {
+    elements.batchReportSummary.textContent = "0 success, 0 failed";
+    elements.batchSuccessList.textContent = "";
+    elements.batchFailedList.textContent = "";
+    return;
+  }
+
+  elements.batchReportSummary.textContent = `${success.length} success, ${failed.length} failed`;
+  renderReportList(elements.batchSuccessList, success, "Belum ada", "success");
+  renderReportList(elements.batchFailedList, failed, "Belum ada", "failed");
+}
+
+async function clearBatchReport() {
+  await chrome.storage.local.remove("authxBatchReport");
+  renderBatchReport(null);
+}
+
 function updateLoginAvailability({ updateStatus = true } = {}) {
   const missingFields = getMissingRequiredFields();
   const avatarUploadReady =
@@ -177,10 +222,19 @@ function isAvatarListTab(tab) {
   }
 }
 
+function isBatchBaseTab(tab) {
+  try {
+    const url = new URL(tab?.url || "");
+    return /^https?:$/i.test(url.protocol) && !isXTab(tab) && !isAvatarTab(tab);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function setTabState(tab) {
   const isX = isXTab(tab);
   const isAvatar = isAvatarTab(tab);
-  const isAvatarList = isAvatarListTab(tab);
+  const isAvatarList = isAvatarListTab(tab) || isBatchBaseTab(tab);
   activeTabIsX = isX;
   activeTabIsAvatar = isAvatar;
   activeTabIsAvatarList = isAvatarList;
@@ -210,7 +264,7 @@ function setTabState(tab) {
   }
 
   if (isAvatarList) {
-    elements.tabBadge.textContent = "Avatar List";
+    elements.tabBadge.textContent = isAvatarListTab(tab) ? "Avatar List" : "Batch Base";
     elements.tabBadge.className = "badge ok";
     elements.loginExport.textContent = isWorking ? "Processing..." : idleLoginButtonLabel();
     updateLoginAvailability();
@@ -482,6 +536,10 @@ async function loginAndExport() {
   if (!isWorking) setBusy(true);
   try {
     setStatus("Processing...");
+    if (activeTabIsAvatarList) {
+      renderBatchReport(null);
+      await chrome.storage.local.remove("authxBatchReport");
+    }
     await chrome.storage.local.set({ account: activeTabIsAvatarList ? {} : account });
     const response = await chrome.runtime.sendMessage({
       type: messageType,
@@ -517,10 +575,12 @@ async function stopWorkflow() {
 }
 
 async function loadSavedState() {
-  const { account = {}, authxJob = null } = await chrome.storage.local.get([
+  const { account = {}, authxJob = null, authxBatchReport = null } = await chrome.storage.local.get([
     "account",
     "authxJob",
+    "authxBatchReport",
   ]);
+  renderBatchReport(authxBatchReport);
   challengeEmail = account.email || "";
   for (const key of accountFields) {
     field(key).value = account[key] || "";
@@ -541,7 +601,7 @@ async function loadSavedState() {
 async function handleJobStatus(status, tone = "") {
   setStatus(status, tone);
 
-  if (PROCESSING_STATUSES.has(status)) {
+  if (PROCESSING_STATUSES.has(status) || status.startsWith("Skipped ")) {
     isWorking = true;
     elements.loginExport.textContent = "Processing...";
     elements.stopWorkflow.hidden = false;
@@ -580,6 +640,9 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "AUTHX_STATUS") {
     handleJobStatus(message.status, message.tone);
   }
+  if (message?.type === "AUTHX_BATCH_REPORT") {
+    renderBatchReport(message.report);
+  }
 });
 
 elements.loginExport.addEventListener("click", () => {
@@ -588,6 +651,10 @@ elements.loginExport.addEventListener("click", () => {
 
 elements.stopWorkflow.addEventListener("click", () => {
   stopWorkflow();
+});
+
+elements.clearBatchReport.addEventListener("click", () => {
+  clearBatchReport().catch((error) => setStatus(error?.message || "Failed to clear report.", "error"));
 });
 
 elements.togglePassword.addEventListener("click", () => {

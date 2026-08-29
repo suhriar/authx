@@ -126,23 +126,79 @@
     return [...root.querySelectorAll(selector)].filter(isVisible);
   }
 
+  function inputLabelText(input) {
+    const ariaLabel = input.getAttribute("aria-label") || "";
+    const placeholder = input.getAttribute("placeholder") || "";
+    const labeledBy = input.getAttribute("aria-labelledby") || "";
+    const labeledByText = labeledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || "")
+      .join(" ");
+    const parentText = input.closest("label, div")?.innerText || "";
+    return [ariaLabel, placeholder, labeledByText, parentText].filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function looksLikeUsernameInput(input) {
+    if (!input || input.type === "password" || input.type === "hidden") return false;
+    const attrs = [
+      input.name,
+      input.id,
+      input.autocomplete,
+      input.inputMode,
+      input.type,
+      inputLabelText(input),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return /username|email|phone|text/.test(attrs) || input.required;
+  }
+
+  async function fillUsernameInputs(root, username) {
+    const candidates = visibleElementsIn(root, "input")
+      .filter((input) => !input.disabled && !input.readOnly && looksLikeUsernameInput(input))
+      .sort((a, b) => Number(b.required) - Number(a.required));
+
+    if (!candidates.length) {
+      return true;
+    }
+
+    for (const input of candidates) {
+      if (input.value.trim() === username) {
+        continue;
+      }
+      if (!input.value.trim() || input.required || /username|email|phone/.test(inputLabelText(input))) {
+        const filled = await typeValue(input, username);
+        if (!filled) return false;
+      }
+    }
+
+    return candidates.every((input) => !input.required || input.value.trim());
+  }
+
   async function ensureUsernameInPasswordForm(passwordInput, username) {
     const root = formRootFor(passwordInput);
-    const usernameInput = visibleElementsIn(root, usernameSelectors.join(",")).find((input) => input !== passwordInput);
+    const usernameInputs = visibleElementsIn(root, usernameSelectors.join(",")).filter((input) => input !== passwordInput);
 
-    if (!usernameInput) {
-      return true;
+    if (usernameInputs.length) {
+      for (const usernameInput of usernameInputs) {
+        if (usernameInput.value.trim() === username) {
+          continue;
+        }
+
+        if (usernameInput.disabled || usernameInput.readOnly) {
+          if (!usernameInput.value.trim()) return false;
+          continue;
+        }
+
+        const filled = await typeValue(usernameInput, username);
+        if (!filled) return false;
+      }
+
+      return usernameInputs.every((input) => !input.required || input.value.trim());
     }
 
-    if (usernameInput.value.trim() === username) {
-      return true;
-    }
-
-    if (usernameInput.disabled || usernameInput.readOnly) {
-      return Boolean(usernameInput.value.trim());
-    }
-
-    return typeValue(usernameInput, username);
+    return fillUsernameInputs(root, username);
   }
 
   async function fillPasswordForm(username, password) {
@@ -170,11 +226,11 @@
     return (element.innerText || element.textContent || "").trim();
   }
 
-  function clickFirst(labels) {
-    const candidates = [...document.querySelectorAll('button, [role="button"], div[dir="ltr"], span')];
+  function clickFirst(labels, root = document) {
+    const candidates = [...root.querySelectorAll('button, [role="button"], div[dir="ltr"], span')];
     const normalized = labels.map((label) => label.toLowerCase());
 
-    for (const candidate of candidates) {
+    for (const candidate of candidates.reverse()) {
       if (!isVisible(candidate)) continue;
       if (normalized.includes(elementText(candidate).toLowerCase())) {
         candidate.click();
@@ -187,8 +243,10 @@
 
   function clickFormButton(labels) {
     const normalized = labels.map((label) => label.toLowerCase());
-    const activeInput = [...document.querySelectorAll("input")].find(isVisible);
-    const root = activeInput?.closest("form") || document;
+    const focusedInput =
+      document.activeElement?.matches?.("input") && isVisible(document.activeElement) ? document.activeElement : null;
+    const activeInput = focusedInput || visibleElements("input").at(-1);
+    const root = formRootFor(activeInput);
     const buttons = [...root.querySelectorAll('button, [role="button"]')].filter((element) => {
       const rect = element.getBoundingClientRect();
       return isVisible(element) && rect.width > 40 && normalized.includes(elementText(element).toLowerCase());
@@ -200,7 +258,7 @@
       return true;
     }
 
-    if (clickFirst(labels)) return true;
+    if (clickFirst(labels, root)) return true;
     document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     return false;
   }
@@ -352,6 +410,25 @@
     return "unknown";
   }
 
+  function loginErrorMessage() {
+    const pageText = document.body?.innerText || "";
+    const patterns = [
+      { pattern: /incorrect\.?\s+please try again/i, message: "Incorrect verification code." },
+      {
+        pattern: /wrong password|incorrect password|password you entered (?:is|was) incorrect/i,
+        message: "Incorrect password.",
+      },
+      {
+        pattern: /couldn.t find (?:your|an active x) account|account doesn.t exist|active x account with that username/i,
+        message: "Account not found.",
+      },
+      { pattern: /too many attempts|try again in a few minutes/i, message: "Too many attempts." },
+      { pattern: /suspicious login|unusual login|temporarily locked|account locked/i, message: "Login blocked by X." },
+      { pattern: /try again later|something went wrong/i, message: "X login returned an error." },
+    ];
+    return patterns.find(({ pattern }) => pattern.test(pageText))?.message || "";
+  }
+
   async function waitForState(states, timeout = 12000) {
     const expected = Array.isArray(states) ? states : [states];
     const deadline = Date.now() + timeout;
@@ -372,6 +449,11 @@
 
     while (Date.now() - started < LOGIN_TIMEOUT_MS) {
       await throwIfCancelled();
+      const loginError = loginErrorMessage();
+      if (loginError) {
+        throw new Error(loginError);
+      }
+
       const state = detectState();
 
       if (state === "already_logged_in") {

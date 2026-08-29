@@ -66,6 +66,26 @@
         </label>
       </section>
 
+      <section class="section batch-report" id="batchReportSection" hidden>
+        <div class="section-title">
+          <h2>Batch Report</h2>
+          <div class="report-title-actions">
+            <span id="batchReportSummary">0 success, 0 failed</span>
+            <button id="clearBatchReport" class="tiny-button" type="button">Clear</button>
+          </div>
+        </div>
+        <div class="report-columns">
+          <div class="report-list">
+            <strong>Berhasil</strong>
+            <ul id="batchSuccessList"></ul>
+          </div>
+          <div class="report-list">
+            <strong>Gagal</strong>
+            <ul id="batchFailedList"></ul>
+          </div>
+        </div>
+      </section>
+
       <section class="status-section">
         <div class="status" id="status">Ready</div>
         <div class="workflow-actions">
