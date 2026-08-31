@@ -3,6 +3,7 @@ const REQUIRED_COOKIES = ["auth_token", "ct0"];
 const COOKIE_WAIT_TIMEOUT_MS = 90000;
 const TAB_READY_TIMEOUT_MS = 30000;
 const X_APP_SETTLE_MS = 4000;
+const INSTAGRAM_APP_SETTLE_MS = 3000;
 const AVATAR_PAGE_SETTLE_MS = 1200;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -115,6 +116,21 @@ async function waitForTabReady(tabId) {
   throw new Error("X tab did not finish loading.");
 }
 
+async function waitForInstagramTabReady(tabId) {
+  const deadline = Date.now() + TAB_READY_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    await throwIfCancelled();
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === "complete" && /^https:\/\/([^/]+\.)?instagram\.com\//i.test(tab.url || "")) {
+      return tab;
+    }
+    await sleep(250);
+  }
+
+  throw new Error("Instagram tab did not finish loading.");
+}
+
 async function waitForAnyTabReady(tabId, matcher, timeoutMessage = "Tab did not finish loading.") {
   const deadline = Date.now() + TAB_READY_TIMEOUT_MS;
 
@@ -133,6 +149,12 @@ async function waitForAnyTabReady(tabId, matcher, timeoutMessage = "Tab did not 
 async function waitForXAppSettle(tabId) {
   await waitForTabReady(tabId);
   await sleep(X_APP_SETTLE_MS);
+  await throwIfCancelled();
+}
+
+async function waitForInstagramAppSettle(tabId) {
+  await waitForInstagramTabReady(tabId);
+  await sleep(INSTAGRAM_APP_SETTLE_MS);
   await throwIfCancelled();
 }
 
@@ -214,6 +236,20 @@ async function openIncognitoXTab() {
     throw new Error("Failed to open incognito X tab.");
   }
   const readyTab = await waitForTabReady(tab.id);
+  return { ...readyTab, windowId: window.id };
+}
+
+async function openIncognitoInstagramTab() {
+  const window = await chrome.windows.create({
+    url: "https://www.instagram.com/",
+    incognito: true,
+    focused: true,
+  });
+  const tab = window.tabs?.[0];
+  if (!tab?.id) {
+    throw new Error("Failed to open incognito Instagram tab.");
+  }
+  const readyTab = await waitForInstagramTabReady(tab.id);
   return { ...readyTab, windowId: window.id };
 }
 
@@ -372,10 +408,11 @@ function extractAvatarListContextFromPage() {
   };
 }
 
-function avatarSearchUrl(baseUrl, username) {
+function avatarSearchUrl(baseUrl, username, platform = "twitter") {
   const url = new URL(baseUrl);
   url.pathname = "/avatars";
   url.search = "";
+  url.searchParams.set("social_media", platform === "instagram" ? "instagram" : "twitter");
   url.searchParams.set("page", "1");
   url.searchParams.set("search", username);
   return url.toString();
@@ -465,6 +502,12 @@ function assertAvatarAccountReady(account, uploadTarget) {
   if (!uploadTarget?.avatarId) throw new Error("Avatar ID not found.");
   if (!uploadTarget?.apiBaseUrl) throw new Error("Avatar API URL not found.");
   if (!uploadTarget?.authToken) throw new Error("Authorization token not found.");
+}
+
+function assertAccountCredentialsReady(account) {
+  if (!account?.username) throw new Error("Username is required.");
+  if (!account?.password) throw new Error("Password is required.");
+  if (!account?.totpSecret) throw new Error("TOTP Secret is required.");
 }
 
 async function executeLoginExport({
@@ -590,12 +633,52 @@ async function executeAvatarItemWorkflow({ account, uploadTarget }) {
   }
 }
 
-async function runAvatarBatchWorkflow({ tabId, batchUsernames = [] }) {
+async function executeInstagramAvatarItemWorkflow({ account }) {
+  await chrome.storage.local.set({ account, authxCancel: false });
+  await setJobStatus("Opening Instagram");
+  let tab = null;
+  try {
+    tab = await openIncognitoInstagramTab();
+    await waitForInstagramAppSettle(tab.id);
+    let needsFinish = true;
+    try {
+      const loginResult = await sendTabMessage(tab.id, { type: "AUTHX_RUN_INSTAGRAM_SESSION", account });
+      await throwIfCancelled();
+      if (!loginResult?.ok) {
+        throw new Error(loginResult?.error || "Instagram workflow failed.");
+      }
+      needsFinish = false;
+    } catch (error) {
+      const message = error?.message || "";
+      if (!/message channel closed|receiving end does not exist|extension context invalidated/i.test(message)) {
+        throw error;
+      }
+    }
+    if (needsFinish) {
+      await waitForInstagramAppSettle(tab.id);
+      const finishResult = await sendTabMessage(tab.id, { type: "AUTHX_FINISH_INSTAGRAM_SESSION" });
+      await throwIfCancelled();
+      if (!finishResult?.ok) {
+        throw new Error(finishResult?.error || "Instagram finish workflow failed.");
+      }
+    }
+    await closeIncognitoTarget({ tabId: tab.id, windowId: tab.windowId });
+    return { action: "Instagram login + logout" };
+  } catch (error) {
+    if (tab?.id) {
+      await closeIncognitoTarget({ tabId: tab.id, windowId: tab.windowId });
+    }
+    throw error;
+  }
+}
+
+async function runAvatarBatchWorkflow({ tabId, batchUsernames = [], batchPlatform = "twitter" }) {
   const usernames = [...new Set(
     batchUsernames
       .map((username) => String(username || "").trim().replace(/^@/, ""))
       .filter(Boolean),
   )];
+  const platform = batchPlatform === "instagram" ? "instagram" : "twitter";
 
   if (!Number.isInteger(tabId) || usernames.length === 0) {
     throw new Error("Username list is empty.");
@@ -616,7 +699,7 @@ async function runAvatarBatchWorkflow({ tabId, batchUsernames = [] }) {
       await throwIfCancelled();
       try {
         await setJobStatus("Searching avatar");
-        await chrome.tabs.update(tabId, { url: avatarSearchUrl(baseUrl, username), active: true });
+        await chrome.tabs.update(tabId, { url: avatarSearchUrl(baseUrl, username, platform), active: true });
         await waitForAnyTabReady(
           tabId,
           (tab) => {
@@ -656,12 +739,22 @@ async function runAvatarBatchWorkflow({ tabId, batchUsernames = [] }) {
         if (account.email) {
           account.email = account.email.trim();
         }
-        assertAvatarAccountReady(account, uploadTarget);
+        if (platform === "instagram") {
+          assertAccountCredentialsReady(account);
+        } else {
+          assertAvatarAccountReady(account, uploadTarget);
+        }
 
-        const { fileName } = await executeAvatarItemWorkflow({ account, uploadTarget });
+        const result =
+          platform === "instagram"
+            ? await executeInstagramAvatarItemWorkflow({ account })
+            : await executeAvatarItemWorkflow({ account, uploadTarget });
         report = await setBatchReport({
           ...report,
-          success: [...report.success, { username, fileName }],
+          success: [
+            ...report.success,
+            result.fileName ? { username, fileName: result.fileName } : { username, action: result.action },
+          ],
         });
       } catch (error) {
         if (error?.authxStopped || error?.message === "Workflow stopped.") {

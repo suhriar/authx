@@ -12,7 +12,7 @@
   const OTP_FIELD_READY_MS = 500;
   const OTP_BOX_WAIT_MS = 5000;
   const OTP_VERIFY_RETRIES = 3;
-  const LOGIN_TIMEOUT_MS = 90000;
+  const LOGIN_TIMEOUT_MS = 180000;
 
   const usernameSelectors = [
     'main input[name="username_or_email"]',
@@ -226,15 +226,71 @@
     return (element.innerText || element.textContent || "").trim();
   }
 
+  function clickLikeUser(element) {
+    const target = element?.closest?.('button, [role="button"], a, div[tabindex]') || element;
+    if (!target) return false;
+    const rect = target.getBoundingClientRect();
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      button: 0,
+      buttons: 1,
+    };
+
+    target.dispatchEvent(new PointerEvent("pointerdown", options));
+    target.dispatchEvent(new MouseEvent("mousedown", options));
+    target.dispatchEvent(new PointerEvent("pointerup", { ...options, buttons: 0 }));
+    target.dispatchEvent(new MouseEvent("mouseup", { ...options, buttons: 0 }));
+    target.dispatchEvent(new MouseEvent("click", { ...options, buttons: 0 }));
+    target.click?.();
+    return true;
+  }
+
+  function hoverLikeUser(element) {
+    const target = element?.closest?.('button, [role="button"], a, div[tabindex]') || element;
+    if (!target) return false;
+    const rect = target.getBoundingClientRect();
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    };
+
+    target.dispatchEvent(new PointerEvent("pointerover", options));
+    target.dispatchEvent(new MouseEvent("mouseover", options));
+    target.dispatchEvent(new PointerEvent("pointerenter", options));
+    target.dispatchEvent(new MouseEvent("mouseenter", options));
+    target.dispatchEvent(new PointerEvent("pointermove", options));
+    target.dispatchEvent(new MouseEvent("mousemove", options));
+    return true;
+  }
+
+  async function hoverInstagramSidebar() {
+    const x = 42;
+    const points = [window.innerHeight * 0.35, window.innerHeight * 0.55, window.innerHeight - 170];
+
+    for (const y of points) {
+      const element = document.elementFromPoint(x, y);
+      if (element) {
+        hoverLikeUser(element);
+        await sleep(250);
+      }
+    }
+  }
+
   function clickFirst(labels, root = document) {
-    const candidates = [...root.querySelectorAll('button, [role="button"], div[dir="ltr"], span')];
+    const candidates = [...root.querySelectorAll('button, [role="button"], a, div[tabindex], div[dir="ltr"], span')];
     const normalized = labels.map((label) => label.toLowerCase());
 
     for (const candidate of candidates.reverse()) {
       if (!isVisible(candidate)) continue;
       if (normalized.includes(elementText(candidate).toLowerCase())) {
-        candidate.click();
-        return true;
+        return clickLikeUser(candidate);
       }
     }
 
@@ -546,11 +602,474 @@
     throw new Error("Login process timed out.");
   }
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== "AUTHX_RUN_LOGIN") {
-      return false;
+  const instagramUsernameSelectors = [
+    'input[name="username"]',
+    'input[autocomplete="username"]',
+    'input[aria-label*="username" i]',
+    'input[aria-label*="email" i]',
+    'input[type="text"]',
+  ];
+  const instagramPasswordSelectors = [
+    'input[name="password"]',
+    'input[autocomplete="current-password"]',
+    'input[type="password"]',
+  ];
+  const instagramCodeSelectors = [
+    'input[name="verificationCode"]',
+    'input[autocomplete="one-time-code"]',
+    'input[aria-label*="code" i]',
+    'input[placeholder*="code" i]',
+    'input[placeholder*="security" i]',
+    'input[inputmode="numeric"]',
+  ];
+
+  function hasInstagramTwoFactorUrl() {
+    return /\/accounts\/login\/(?:two_step_verification|two_factor)/i.test(window.location.href) || /two_step_verification|two_factor/i.test(window.location.href);
+  }
+
+  function hasInstagramTwoFactorText() {
+    const pageText = document.body?.innerText || "";
+    return /authentication app|6-digit (?:login )?code|security code|two-factor|two factor/i.test(pageText);
+  }
+
+  function hasInstagramAutomationWarning() {
+    const pageText = document.body?.innerText || "";
+    return /\/accounts\/scraping_warning/i.test(window.location.pathname) || /suspect automated behavior|automated behavior on your account/i.test(pageText);
+  }
+
+  function instagramErrorMessage() {
+    const pageText = document.body?.innerText || "";
+    if (/\/accounts\/suspended/i.test(window.location.pathname)) {
+      return "Instagram human verification checkpoint.";
     }
 
+    const patterns = [
+      { pattern: /password (?:you entered )?(?:is|was) incorrect|incorrect password/i, message: "Incorrect password." },
+      { pattern: /username you entered doesn.t belong|couldn.t find an account|user not found/i, message: "Instagram account not found." },
+      { pattern: /please check the code|security code is incorrect|code you entered is incorrect/i, message: "Incorrect Instagram 2FA code." },
+      { pattern: /try again later|wait a few minutes|temporarily blocked/i, message: "Instagram temporarily blocked login." },
+      { pattern: /confirm you.re human|confirm that you.re human|takes about 30 seconds/i, message: "Instagram human verification checkpoint." },
+      { pattern: /suspicious login attempt|confirm it.s you|checkpoint/i, message: "Instagram login checkpoint." },
+    ];
+    return patterns.find(({ pattern }) => pattern.test(pageText))?.message || "";
+  }
+
+  function isInstagramLoggedIn() {
+    const path = window.location.pathname;
+    const pageText = document.body?.innerText || "";
+    if (/\/accounts\/login/i.test(path)) return false;
+    if (/log in|sign up/i.test(pageText) && visibleElements(instagramPasswordSelectors.join(",")).length) return false;
+    return (
+      path === "/" ||
+      /\/accounts\/onetap/i.test(path) ||
+      Boolean(document.querySelector('a[href="/"], a[href="/direct/inbox/"], svg[aria-label="Home"], svg[aria-label="Instagram"]'))
+    );
+  }
+
+  function instagramState() {
+    const hasTwoFactorPageText = hasInstagramTwoFactorText();
+    const hasPasswordInput = visibleElements(instagramPasswordSelectors.join(",")).length > 0;
+    if (hasInstagramTwoFactorUrl() && hasTwoFactorPageText && !hasPasswordInput) {
+      return "two_factor";
+    }
+    if (hasTwoFactorPageText && !hasPasswordInput) {
+      return "two_factor";
+    }
+    if (isInstagramLoggedIn()) {
+      return "logged_in";
+    }
+    if (visibleElements(instagramPasswordSelectors.join(",")).length) {
+      return "login";
+    }
+    return "unknown";
+  }
+
+  async function waitForInstagramState(states, timeout = 15000) {
+    const expected = Array.isArray(states) ? states : [states];
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      await throwIfCancelled();
+      const error = instagramErrorMessage();
+      if (error) throw new Error(error);
+
+      const state = instagramState();
+      if (expected.includes(state)) {
+        return state;
+      }
+      await sleep(500);
+    }
+
+    return instagramState();
+  }
+
+  async function clickInstagramButton(labels) {
+    await sleep(FIELD_SETTLE_MS);
+    return clickFirst(labels);
+  }
+
+  function instagramTwoFactorInput() {
+    const candidates = visibleElements("input")
+      .filter((input) => !input.disabled && !input.readOnly && input.type !== "password" && input.type !== "checkbox")
+      .map((input) => {
+        const attrs = [
+          input.name,
+          input.id,
+          input.autocomplete,
+          input.inputMode,
+          input.type,
+          input.placeholder,
+          input.getAttribute("aria-label"),
+          inputLabelText(input),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const isLoginIdentity = /username|email|phone|password/.test(attrs);
+        const isCodeLike = /verification|one-time|security|code|numeric|tel/.test(attrs);
+        return { input, isLoginIdentity, isCodeLike };
+      })
+      .filter((item) => item.isCodeLike && !item.isLoginIdentity);
+
+    return candidates[0]?.input || null;
+  }
+
+  async function waitForInstagramTwoFactorReady(timeout = 20000) {
+    const deadline = Date.now() + timeout;
+    let sawTwoFactorUrlAt = 0;
+
+    while (Date.now() < deadline) {
+      await throwIfCancelled();
+      const error = instagramErrorMessage();
+      if (error) throw new Error(error);
+
+      const hasTwoFactorUrl = hasInstagramTwoFactorUrl();
+      const hasTwoFactorPageText = hasInstagramTwoFactorText();
+      const hasPasswordInput = visibleElements(instagramPasswordSelectors.join(",")).length > 0;
+
+      if (hasTwoFactorUrl && hasTwoFactorPageText && !hasPasswordInput) {
+        sawTwoFactorUrlAt ||= Date.now();
+      }
+
+      const codeInput = instagramTwoFactorInput();
+      const pageReady = sawTwoFactorUrlAt && codeInput && Date.now() - sawTwoFactorUrlAt >= 2500;
+      if (pageReady) {
+        await sleep(1000);
+        return true;
+      }
+
+      await sleep(500);
+    }
+
+    return false;
+  }
+
+  async function dismissInstagramPrompts({ waitForPrompt = false } = {}) {
+    const labels = ["Not now", "Not Now", "Lain kali", "Nanti", "Cancel"];
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await throwIfCancelled();
+      const dialog = [...document.querySelectorAll('[role="dialog"], div[aria-modal="true"]')].filter(isVisible).at(-1);
+      const clicked = dialog ? clickFirst(labels, dialog) : clickFirst(labels);
+      if (clicked) {
+        await sleep(1000);
+        continue;
+      }
+      if (!waitForPrompt) break;
+      await sleep(750);
+    }
+  }
+
+  async function closeInstagramTransientPanels() {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", bubbles: true }));
+      await sleep(350);
+    }
+  }
+
+  async function fillInstagramLoginForm(username, password, update) {
+    update("Entering Instagram Username");
+    const usernameFilled = await fillFirst(instagramUsernameSelectors, username);
+    if (!usernameFilled) throw new Error("Instagram username field not found.");
+
+    update("Entering Instagram Password");
+    const passwordFilled = await fillFirst(instagramPasswordSelectors, password);
+    if (!passwordFilled) throw new Error("Instagram password field not found.");
+
+    await clickInstagramButton(["Log in", "Log In"]);
+  }
+
+  async function fillInstagramTwoFactor(totpSecret, update) {
+    update("Waiting for Instagram 2FA page");
+    const ready = await waitForInstagramTwoFactorReady();
+    if (!ready) throw new Error("Instagram 2FA page did not finish loading.");
+
+    update("Generating Instagram TOTP");
+    const code = await globalThis.AuthXTotp.generate(totpSecret);
+    const codeInput = instagramTwoFactorInput();
+    const filled = codeInput ? await typeValue(codeInput, code) : false;
+    if (!filled) throw new Error("Instagram 2FA field not found.");
+    await clickInstagramButton(["Continue", "Confirm"]);
+  }
+
+  async function waitForManualInstagramDismiss(update, timeout = 120000) {
+    update("Manual Instagram dismiss required");
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      await throwIfCancelled();
+      if (!hasInstagramAutomationWarning()) {
+        await sleep(1500);
+        return true;
+      }
+      await sleep(1000);
+    }
+
+    throw new Error("Instagram automated behavior warning was not dismissed.");
+  }
+
+  async function waitForInstagramSession({ username, password, totpSecret }, update) {
+    const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+    let submittedLogin = false;
+    let submittedTwoFactor = false;
+
+    while (Date.now() < deadline) {
+      await throwIfCancelled();
+      if (hasInstagramAutomationWarning()) {
+        await waitForManualInstagramDismiss(update);
+        continue;
+      }
+
+      const error = instagramErrorMessage();
+      if (error) throw new Error(error);
+
+      if (isInstagramLoggedIn()) {
+        update("Dismissing Instagram prompts");
+        await dismissInstagramPrompts({ waitForPrompt: submittedTwoFactor });
+        if (isInstagramLoggedIn()) {
+          update("Checking Instagram home");
+          update("Dismissing Instagram prompts");
+          await dismissInstagramPrompts({ waitForPrompt: true });
+          return;
+        }
+      }
+
+      const hasPassword = visibleElements(instagramPasswordSelectors.join(",")).length > 0;
+      const needsTwoFactor = hasInstagramTwoFactorText() || hasInstagramTwoFactorUrl();
+
+      if (needsTwoFactor && !submittedTwoFactor) {
+        update("Waiting for Instagram 2FA");
+        await fillInstagramTwoFactor(totpSecret, update);
+        submittedTwoFactor = true;
+        await sleep(STEP_DELAY_MS);
+        continue;
+      }
+
+      if (hasPassword && !submittedLogin) {
+        await fillInstagramLoginForm(username, password, update);
+        submittedLogin = true;
+        const nextState = await waitForInstagramState(["two_factor", "logged_in"], 20000);
+        if (nextState === "two_factor") {
+          update("Waiting for Instagram 2FA");
+          await fillInstagramTwoFactor(totpSecret, update);
+          submittedTwoFactor = true;
+        }
+        await sleep(STEP_DELAY_MS);
+        continue;
+      }
+
+      await dismissInstagramPrompts();
+      await sleep(750);
+    }
+
+    throw new Error("Instagram login process timed out.");
+  }
+
+  async function scrollInstagramHome(update) {
+    update("Scrolling Instagram home");
+    await dismissInstagramPrompts();
+    let unchangedLoads = 0;
+    let previousHeight = document.documentElement.scrollHeight;
+
+    for (let index = 0; index < 18 && unchangedLoads < 4; index += 1) {
+      await throwIfCancelled();
+      const distance = Math.floor(window.innerHeight * (1.25 + Math.random() * 0.55));
+      window.scrollBy({ top: distance, behavior: "smooth" });
+      await sleep(randomDelay(900, 1600));
+      await dismissInstagramPrompts();
+
+      const nearBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 500;
+      if (nearBottom) {
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+        await sleep(randomDelay(1800, 2800));
+      }
+
+      const currentHeight = document.documentElement.scrollHeight;
+      if (currentHeight > previousHeight + 250) {
+        previousHeight = currentHeight;
+        unchangedLoads = 0;
+      } else if (nearBottom) {
+        unchangedLoads += 1;
+      }
+    }
+  }
+
+  function findInstagramMoreButton() {
+    const candidates = visibleElements('button, [role="button"], a, div[tabindex]')
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const label = [
+          elementText(element),
+          element.getAttribute("aria-label"),
+          element.getAttribute("title"),
+          ...[...element.querySelectorAll("svg")].map((svg) => svg.getAttribute("aria-label")),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        return { element, label, rect };
+      })
+      .filter(({ label, rect }) => {
+        const isMore = /(^|\s)(more|menu)(\s|$)/i.test(label);
+        const isSidebarArea = rect.left < Math.min(260, window.innerWidth * 0.22) && rect.top > window.innerHeight * 0.45;
+        const isCompactMoreArea =
+          isSidebarArea &&
+          rect.top > window.innerHeight * 0.65 &&
+          rect.top < window.innerHeight - 110 &&
+          rect.width >= 24 &&
+          rect.height >= 24;
+        return (isMore && isSidebarArea) || isCompactMoreArea;
+      })
+      .sort((a, b) => {
+        const aIsLabeled = /(^|\s)(more|menu)(\s|$)/i.test(a.label);
+        const bIsLabeled = /(^|\s)(more|menu)(\s|$)/i.test(b.label);
+        if (aIsLabeled !== bIsLabeled) return Number(bIsLabeled) - Number(aIsLabeled);
+        const targetTop = window.innerHeight - 170;
+        return Math.abs(a.rect.top - targetTop) - Math.abs(b.rect.top - targetTop);
+      });
+
+    return candidates[0]?.element || null;
+  }
+
+  async function openInstagramMoreMenu() {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await throwIfCancelled();
+      await hoverInstagramSidebar();
+      const moreButton = findInstagramMoreButton();
+      if (!moreButton) {
+        await sleep(500);
+        continue;
+      }
+
+      hoverLikeUser(moreButton);
+      await sleep(900);
+
+      const labeledMoreButton = findInstagramMoreButton();
+      if (labeledMoreButton && clickLikeUser(labeledMoreButton)) {
+        await sleep(1200);
+        return true;
+      }
+
+      if (clickLikeUser(moreButton)) {
+        await sleep(1200);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function findInstagramLogoutButton(root = document) {
+    const candidates = [...root.querySelectorAll('button, [role="button"], a, div[tabindex], span, div[dir="ltr"]')]
+      .filter(isVisible)
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const text = elementText(element);
+        const href = element.getAttribute("href") || "";
+        return { element, rect, text, href };
+      })
+      .filter(({ text, href }) => /^(log out|logout)$/i.test(text) || /logout/i.test(href))
+      .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+
+    return candidates[0]?.element || null;
+  }
+
+  async function clickInstagramLogoutButton(timeout = 8000) {
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      await throwIfCancelled();
+      const dialog = [...document.querySelectorAll('[role="dialog"], div[aria-modal="true"]')].filter(isVisible).at(-1);
+      const target = findInstagramLogoutButton(dialog || document);
+      if (target && clickLikeUser(target)) {
+        return true;
+      }
+      await sleep(500);
+    }
+
+    return false;
+  }
+
+  function isInstagramLoggedOut() {
+    const path = window.location.pathname;
+    const pageText = document.body?.innerText || "";
+    const hasLoginForm =
+      visibleElements(instagramUsernameSelectors.join(",")).length > 0 &&
+      visibleElements(instagramPasswordSelectors.join(",")).length > 0;
+
+    return /\/accounts\/login/i.test(path) || (hasLoginForm && /log in|log into instagram|sign up/i.test(pageText));
+  }
+
+  async function waitForInstagramLoggedOut(timeout = 5000) {
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      await throwIfCancelled();
+      if (isInstagramLoggedOut()) {
+        await sleep(300);
+        return true;
+      }
+      await sleep(300);
+    }
+
+    return isInstagramLoggedOut();
+  }
+
+  async function logoutInstagram(update) {
+    update("Logging out Instagram");
+    await dismissInstagramPrompts();
+    await closeInstagramTransientPanels();
+
+    const openedMenu = await openInstagramMoreMenu();
+    if (!openedMenu) throw new Error("Instagram More button not found.");
+
+    const clickedLogout = await clickInstagramLogoutButton();
+    if (!clickedLogout) throw new Error("Instagram logout button not found.");
+
+    await sleep(300);
+  }
+
+  async function runInstagramSession(account, update) {
+    await waitForInstagramSession(account, update);
+    await scrollInstagramHome(update);
+    await logoutInstagram(update);
+    return { ok: true };
+  }
+
+  async function finishInstagramSession(update) {
+    update("Dismissing Instagram prompts");
+    await dismissInstagramPrompts({ waitForPrompt: true });
+    if (/\/accounts\/onetap/i.test(window.location.pathname)) {
+      window.location.href = "/";
+      await sleep(2500);
+    }
+    await scrollInstagramHome(update);
+    await logoutInstagram(update);
+    return { ok: true };
+  }
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const update = (status) => {
       try {
         const result = chrome.runtime.sendMessage({ type: "AUTHX_STATUS", status });
@@ -559,10 +1078,28 @@
         // Status updates are best-effort; the login workflow should continue.
       }
     };
-    runLogin(message.account, update)
-      .then((result) => sendResponse(result))
-      .catch((error) => sendResponse({ ok: false, error: error?.message || "Authentication failed." }));
 
-    return true;
+    if (message?.type === "AUTHX_RUN_LOGIN") {
+      runLogin(message.account, update)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: error?.message || "Authentication failed." }));
+      return true;
+    }
+
+    if (message?.type === "AUTHX_RUN_INSTAGRAM_SESSION") {
+      runInstagramSession(message.account, update)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: error?.message || "Instagram workflow failed." }));
+      return true;
+    }
+
+    if (message?.type === "AUTHX_FINISH_INSTAGRAM_SESSION") {
+      finishInstagramSession(update)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: error?.message || "Instagram finish workflow failed." }));
+      return true;
+    }
+
+    return false;
   });
 })();

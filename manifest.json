@@ -34,7 +34,9 @@
     "https://x.com/*",
     "https://*.x.com/*",
     "https://twitter.com/*",
-    "https://*.twitter.com/*"
+    "https://*.twitter.com/*",
+    "https://instagram.com/*",
+    "https://*.instagram.com/*"
   ],
   "content_scripts": [
     {
@@ -42,7 +44,9 @@
         "https://x.com/*",
         "https://*.x.com/*",
         "https://twitter.com/*",
-        "https://*.twitter.com/*"
+        "https://*.twitter.com/*",
+        "https://instagram.com/*",
+        "https://*.instagram.com/*"
       ],
       "js": [
         "totp.js",

@@ -8,6 +8,7 @@ const elements = {
   stopWorkflow: document.querySelector("#stopWorkflow"),
   togglePassword: document.querySelector("#togglePassword"),
   batchSection: document.querySelector("#batchSection"),
+  batchPlatform: document.querySelector("#batchPlatform"),
   batchUsernames: document.querySelector("#batchUsernames"),
   batchCount: document.querySelector("#batchCount"),
   batchReportSection: document.querySelector("#batchReportSection"),
@@ -23,6 +24,18 @@ const PROCESSING_STATUSES = new Set([
   "Searching avatar",
   "Opening avatar detail",
   "Reading avatar detail",
+  "Opening Instagram",
+  "Entering Instagram Username",
+  "Entering Instagram Password",
+  "Waiting for Instagram 2FA page",
+  "Waiting for Instagram 2FA",
+  "Generating Instagram TOTP",
+  "Manual Instagram dismiss required",
+  "Dismissing Instagram prompts",
+  "Checking Instagram home",
+  "Scrolling Instagram home",
+  "Logging out Instagram",
+  "Confirming Instagram logout",
   "Starting login workflow",
   "Opening login",
   "Entering Username",
@@ -104,6 +117,10 @@ function getBatchUsernames() {
     .filter(Boolean);
 }
 
+function getBatchPlatform() {
+  return elements.batchPlatform?.value === "instagram" ? "instagram" : "twitter";
+}
+
 function updateBatchCount() {
   const count = getBatchUsernames().length;
   if (elements.batchCount) {
@@ -124,7 +141,7 @@ function renderReportList(list, items, emptyLabel, itemClass) {
   for (const item of items) {
     const row = document.createElement("li");
     row.className = itemClass;
-    row.textContent = item.reason ? `${item.username}: ${item.reason}` : item.username;
+    row.textContent = item.reason || item.action ? `${item.username}: ${item.reason || item.action}` : item.username;
     list.append(row);
   }
 }
@@ -173,7 +190,8 @@ function updateLoginAvailability({ updateStatus = true } = {}) {
   }
 
   if (activeTabIsAvatarList) {
-    setStatus(avatarListReady ? `Ready to search ${batchCount} username(s).` : "Paste username list to continue.", avatarListReady ? "" : "error");
+    const platform = getBatchPlatform() === "instagram" ? "Instagram" : "Twitter/X";
+    setStatus(avatarListReady ? `Ready to search ${batchCount} ${platform} username(s).` : "Paste username list to continue.", avatarListReady ? "" : "error");
     return;
   }
 
@@ -204,6 +222,10 @@ function isXTab(tab) {
   return /^https:\/\/([^/]+\.)?(x|twitter)\.com\//i.test(tab?.url || "");
 }
 
+function isInstagramTab(tab) {
+  return /^https:\/\/([^/]+\.)?instagram\.com\//i.test(tab?.url || "");
+}
+
 function isAvatarTab(tab) {
   try {
     const url = new URL(tab?.url || "");
@@ -225,7 +247,7 @@ function isAvatarListTab(tab) {
 function isBatchBaseTab(tab) {
   try {
     const url = new URL(tab?.url || "");
-    return /^https?:$/i.test(url.protocol) && !isXTab(tab) && !isAvatarTab(tab);
+    return /^https?:$/i.test(url.protocol) && !isXTab(tab) && !isInstagramTab(tab) && !isAvatarTab(tab);
   } catch (_error) {
     return false;
   }
@@ -520,6 +542,7 @@ async function loginAndExport() {
   }
 
   const batchUsernames = activeTabIsAvatarList ? getBatchUsernames() : [];
+  const batchPlatform = activeTabIsAvatarList ? getBatchPlatform() : "twitter";
   if (activeTabIsAvatarList && batchUsernames.length === 0) {
     setStatus("Paste username list to continue.", "error");
     return;
@@ -547,6 +570,7 @@ async function loginAndExport() {
       account: activeTabIsAvatarList ? null : account,
       uploadTarget: activeTabIsAvatar ? avatarUploadTarget : null,
       batchUsernames: activeTabIsAvatarList ? batchUsernames : [],
+      batchPlatform,
     });
     if (!response?.ok) {
       throw new Error(response?.error || "Failed to start AuthX workflow.");
@@ -681,6 +705,10 @@ elements.batchUsernames.addEventListener("input", () => {
   if (!isWorking && elements.loginExport.textContent === "Finish") {
     elements.loginExport.textContent = idleLoginButtonLabel();
   }
+  updateLoginAvailability();
+});
+
+elements.batchPlatform.addEventListener("change", () => {
   updateLoginAvailability();
 });
 
