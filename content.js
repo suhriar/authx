@@ -17,10 +17,16 @@
   const usernameSelectors = [
     'main input[name="username_or_email"]',
     'main input[autocomplete*="username"]',
+    'main input[type="email"]',
+    'main input[role="textbox"]',
     'main input[type="text"]',
     'input[name="username_or_email"]',
     'input[autocomplete="username"]',
     'input[autocomplete*="username"]',
+    'input[type="email"]',
+    'input[role="textbox"]',
+    'input[data-testid*="username" i]',
+    'input[data-testid*="email" i]',
     'input[name="text"]',
     'input[type="text"]',
   ];
@@ -146,6 +152,8 @@
       input.autocomplete,
       input.inputMode,
       input.type,
+      input.getAttribute("data-testid"),
+      input.getAttribute("role"),
       inputLabelText(input),
     ]
       .filter(Boolean)
@@ -198,6 +206,10 @@
       return usernameInputs.every((input) => !input.required || input.value.trim());
     }
 
+    // X may carry the identity from the previous step without rendering it
+    // beside the password field. In that case the password can still be filled.
+    const allInputs = visibleElementsIn(root, "input").filter((input) => input !== passwordInput);
+    if (!allInputs.length) return true;
     return fillUsernameInputs(root, username);
   }
 
@@ -844,14 +856,8 @@
       if (error) throw new Error(error);
 
       if (isInstagramLoggedIn()) {
-        update("Dismissing Instagram prompts");
-        await dismissInstagramPrompts({ waitForPrompt: submittedTwoFactor });
-        if (isInstagramLoggedIn()) {
-          update("Checking Instagram home");
-          update("Dismissing Instagram prompts");
-          await dismissInstagramPrompts({ waitForPrompt: true });
-          return;
-        }
+        update("Instagram ready for manual activity");
+        return;
       }
 
       const hasPassword = visibleElements(instagramPasswordSelectors.join(",")).length > 0;
@@ -1052,8 +1058,7 @@
 
   async function runInstagramSession(account, update) {
     await waitForInstagramSession(account, update);
-    await scrollInstagramHome(update);
-    await logoutInstagram(update);
+    update("Instagram ready for manual activity");
     return { ok: true };
   }
 

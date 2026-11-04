@@ -5,6 +5,7 @@ const TAB_READY_TIMEOUT_MS = 30000;
 const X_APP_SETTLE_MS = 4000;
 const INSTAGRAM_APP_SETTLE_MS = 3000;
 const AVATAR_PAGE_SETTLE_MS = 1200;
+let workflowInProgress = false;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -107,7 +108,7 @@ async function waitForTabReady(tabId) {
   while (Date.now() < deadline) {
     await throwIfCancelled();
     const tab = await chrome.tabs.get(tabId);
-    if (tab.status === "complete" && /^https:\/\/([^/]+\.)?(x|twitter)\.com\//i.test(tab.url || "")) {
+    if (tab.status === "complete" && /^https:\/\/([^/]+\.)?(x|twitter)\.com(?:\/|$)/i.test(tab.url || "")) {
       return tab;
     }
     await sleep(250);
@@ -122,7 +123,7 @@ async function waitForInstagramTabReady(tabId) {
   while (Date.now() < deadline) {
     await throwIfCancelled();
     const tab = await chrome.tabs.get(tabId);
-    if (tab.status === "complete" && /^https:\/\/([^/]+\.)?instagram\.com\//i.test(tab.url || "")) {
+    if (tab.status === "complete" && /^https:\/\/([^/]+\.)?instagram\.com(?:\/|$)/i.test(tab.url || "")) {
       return tab;
     }
     await sleep(250);
@@ -225,32 +226,152 @@ async function closeIncognitoTarget({ tabId, windowId }) {
   }
 }
 
-async function openIncognitoXTab() {
-  const window = await chrome.windows.create({
-    url: "https://x.com",
-    incognito: true,
-    focused: true,
-  });
-  const tab = window.tabs?.[0];
-  if (!tab?.id) {
-    throw new Error("Failed to open incognito X tab.");
+async function waitForTabClosed(tabId) {
+  while (true) {
+    await throwIfCancelled();
+    try {
+      await chrome.tabs.get(tabId);
+    } catch (_error) {
+      return;
+    }
+    await sleep(1000);
   }
-  const readyTab = await waitForTabReady(tab.id);
-  return { ...readyTab, windowId: window.id };
+}
+
+async function findIncognitoTab(urlPattern = []) {
+  const deadline = Date.now() + 5000;
+
+  while (Date.now() < deadline) {
+    let tabs = [];
+    try {
+      const windows = await chrome.windows.getAll({ populate: true });
+      tabs = windows.flatMap((candidateWindow) => candidateWindow.tabs || []);
+    } catch (_error) {
+      // Fall back to the tabs API if Chrome does not populate window tabs.
+      tabs = await chrome.tabs.query({});
+    }
+    const incognitoTabs = tabs.filter((candidate) => candidate.incognito && Number.isInteger(candidate.id));
+    const tab = incognitoTabs.find((candidate) => {
+      try {
+        const hostname = new URL(candidate.url || "").hostname.toLowerCase();
+        return urlPattern.some((pattern) => {
+          const patternHostname = pattern
+            .replace(/^https?:\/\//i, "")
+            .replace(/^\*\./, "")
+            .split("/")[0]
+            .toLowerCase();
+          return hostname === patternHostname || hostname.endsWith(`.${patternHostname}`);
+        });
+      } catch (_error) {
+        return false;
+      }
+    });
+    if (tab) return tab;
+    // During creation Chrome may expose the incognito tab before its URL is
+    // available. Reuse that tab instead of creating another window.
+    if (incognitoTabs[0]) return incognitoTabs[0];
+    await sleep(250);
+  }
+
+  return null;
+}
+
+async function waitForWindowTab(windowId, url) {
+  const deadline = Date.now() + 10000;
+
+  while (Date.now() < deadline) {
+    const tabs = await chrome.tabs.query({ windowId });
+    const tab = tabs.find((candidate) => candidate?.incognito && Number.isInteger(candidate.id));
+    if (tab) return tab;
+
+    // Some Chrome versions create the window first and attach its initial tab
+    // asynchronously. Keep the same window and add a tab only if it is empty.
+    try {
+      const currentWindow = await chrome.windows.get(windowId, { populate: true });
+      if (currentWindow?.tabs?.length === 0) {
+        return await chrome.tabs.create({ windowId, url, active: true });
+      }
+    } catch (_error) {
+      // The window may still be initializing.
+    }
+    await sleep(250);
+  }
+
+  return null;
+}
+
+async function openIncognitoTab({ url, urlPattern, label }) {
+  // Reuse a tab left by a previous attempt instead of opening another window.
+  const existingTab = await findIncognitoTab(urlPattern);
+  if (existingTab?.id) {
+    if (!urlPattern.some((pattern) => {
+      try {
+        const hostname = new URL(existingTab.url || "").hostname.toLowerCase();
+        const expected = pattern.replace(/^https?:\/\//i, "").replace(/^\*\./, "").split("/")[0].toLowerCase();
+        return hostname === expected || hostname.endsWith(`.${expected}`);
+      } catch (_error) {
+        return false;
+      }
+    })) {
+      await chrome.tabs.update(existingTab.id, { url, active: true });
+    }
+    const readyTab = label === "X"
+      ? await waitForTabReady(existingTab.id)
+      : await waitForInstagramTabReady(existingTab.id);
+    return { ...readyTab, windowId: existingTab.windowId };
+  }
+
+  let createdWindow = null;
+  let createError = null;
+
+  try {
+    createdWindow = await chrome.windows.create({
+      url,
+      incognito: true,
+      focused: true,
+    });
+  } catch (error) {
+    createError = error;
+  }
+
+  // Chrome can create the window but return null/reject the Promise while the
+  // browser is still attaching the initial tab. Recover that tab before retrying.
+  const tab = createdWindow?.tabs?.find((candidate) => candidate?.id)
+    || (createdWindow?.id
+      ? await waitForWindowTab(createdWindow.id, url)
+      : null)
+    || await findIncognitoTab([]);
+
+  if (!tab?.id) {
+    if (createError?.message) {
+      throw new Error(`Cannot access incognito ${label} tab: ${createError.message}`);
+    }
+    throw new Error(
+      `Cannot access incognito ${label} tab. Open extension details and enable "Allow in incognito".`,
+    );
+  }
+
+  const windowId = createdWindow?.id || tab.windowId;
+  const readyTab = label === "X"
+    ? await waitForTabReady(tab.id)
+    : await waitForInstagramTabReady(tab.id);
+  return { ...readyTab, windowId };
+}
+
+async function openIncognitoXTab() {
+  return openIncognitoTab({
+    url: "https://x.com",
+    urlPattern: ["https://x.com/*", "https://*.x.com/*", "https://twitter.com/*", "https://*.twitter.com/*"],
+    label: "X",
+  });
 }
 
 async function openIncognitoInstagramTab() {
-  const window = await chrome.windows.create({
+  return openIncognitoTab({
     url: "https://www.instagram.com/",
-    incognito: true,
-    focused: true,
+    urlPattern: ["https://instagram.com/*", "https://*.instagram.com/*"],
+    label: "Instagram",
   });
-  const tab = window.tabs?.[0];
-  if (!tab?.id) {
-    throw new Error("Failed to open incognito Instagram tab.");
-  }
-  const readyTab = await waitForInstagramTabReady(tab.id);
-  return { ...readyTab, windowId: window.id };
 }
 
 function extractAvatarAccountFromPage() {
@@ -591,6 +712,19 @@ async function runWorkflow({
   }
 }
 
+async function startExclusiveWorkflow(run) {
+  const { authxWorkflowRunning = false } = await chrome.storage.local.get("authxWorkflowRunning");
+  if (authxWorkflowRunning) {
+    throw new Error("A workflow is already running.");
+  }
+  await chrome.storage.local.set({ authxWorkflowRunning: true });
+  try {
+    return await run();
+  } finally {
+    await chrome.storage.local.remove("authxWorkflowRunning");
+  }
+}
+
 async function runAvatarWorkflow({ account, uploadTarget }) {
   try {
     const { fileName } = await executeAvatarItemWorkflow({ account, uploadTarget });
@@ -640,30 +774,15 @@ async function executeInstagramAvatarItemWorkflow({ account }) {
   try {
     tab = await openIncognitoInstagramTab();
     await waitForInstagramAppSettle(tab.id);
-    let needsFinish = true;
-    try {
-      const loginResult = await sendTabMessage(tab.id, { type: "AUTHX_RUN_INSTAGRAM_SESSION", account });
-      await throwIfCancelled();
-      if (!loginResult?.ok) {
-        throw new Error(loginResult?.error || "Instagram workflow failed.");
-      }
-      needsFinish = false;
-    } catch (error) {
-      const message = error?.message || "";
-      if (!/message channel closed|receiving end does not exist|extension context invalidated/i.test(message)) {
-        throw error;
-      }
+    const loginResult = await sendTabMessage(tab.id, { type: "AUTHX_RUN_INSTAGRAM_SESSION", account });
+    await throwIfCancelled();
+    if (!loginResult?.ok) {
+      throw new Error(loginResult?.error || "Instagram workflow failed.");
     }
-    if (needsFinish) {
-      await waitForInstagramAppSettle(tab.id);
-      const finishResult = await sendTabMessage(tab.id, { type: "AUTHX_FINISH_INSTAGRAM_SESSION" });
-      await throwIfCancelled();
-      if (!finishResult?.ok) {
-        throw new Error(finishResult?.error || "Instagram finish workflow failed.");
-      }
-    }
-    await closeIncognitoTarget({ tabId: tab.id, windowId: tab.windowId });
-    return { action: "Instagram login + logout" };
+
+    await setJobStatus("Manual Instagram activity");
+    await waitForTabClosed(tab.id);
+    return { action: "Instagram login completed, manual session closed" };
   } catch (error) {
     if (tab?.id) {
       await closeIncognitoTarget({ tabId: tab.id, windowId: tab.windowId });
@@ -800,19 +919,46 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === "AUTHX_START_WORKFLOW") {
-    runWorkflow(message).catch((error) => setJobStatus(error?.message || "Cookie export failed.", "error"));
+    if (workflowInProgress) {
+      sendResponse({ ok: false, error: "A workflow is already running." });
+      return false;
+    }
+    workflowInProgress = true;
+    startExclusiveWorkflow(() => runWorkflow(message))
+      .catch((error) => setJobStatus(error?.message || "Cookie export failed.", "error"))
+      .finally(() => {
+        workflowInProgress = false;
+      });
     sendResponse({ ok: true });
     return false;
   }
 
   if (message?.type === "AUTHX_START_AVATAR_WORKFLOW") {
-    runAvatarWorkflow(message).catch((error) => setJobStatus(error?.message || "Cookie export failed.", "error"));
+    if (workflowInProgress) {
+      sendResponse({ ok: false, error: "A workflow is already running." });
+      return false;
+    }
+    workflowInProgress = true;
+    startExclusiveWorkflow(() => runAvatarWorkflow(message))
+      .catch((error) => setJobStatus(error?.message || "Cookie export failed.", "error"))
+      .finally(() => {
+        workflowInProgress = false;
+      });
     sendResponse({ ok: true });
     return false;
   }
 
   if (message?.type === "AUTHX_START_AVATAR_BATCH_WORKFLOW") {
-    runAvatarBatchWorkflow(message).catch((error) => setJobStatus(error?.message || "Cookie export failed.", "error"));
+    if (workflowInProgress) {
+      sendResponse({ ok: false, error: "A workflow is already running." });
+      return false;
+    }
+    workflowInProgress = true;
+    startExclusiveWorkflow(() => runAvatarBatchWorkflow(message))
+      .catch((error) => setJobStatus(error?.message || "Cookie export failed.", "error"))
+      .finally(() => {
+        workflowInProgress = false;
+      });
     sendResponse({ ok: true });
     return false;
   }

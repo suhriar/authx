@@ -1,4 +1,3 @@
-const accountFields = ["username", "password", "totpSecret"];
 const REQUIRED_COOKIES = ["auth_token", "ct0"];
 
 const elements = {
@@ -6,9 +5,7 @@ const elements = {
   status: document.querySelector("#status"),
   loginExport: document.querySelector("#loginExport"),
   stopWorkflow: document.querySelector("#stopWorkflow"),
-  togglePassword: document.querySelector("#togglePassword"),
   batchSection: document.querySelector("#batchSection"),
-  batchPlatform: document.querySelector("#batchPlatform"),
   batchUsernames: document.querySelector("#batchUsernames"),
   batchCount: document.querySelector("#batchCount"),
   batchReportSection: document.querySelector("#batchReportSection"),
@@ -24,18 +21,6 @@ const PROCESSING_STATUSES = new Set([
   "Searching avatar",
   "Opening avatar detail",
   "Reading avatar detail",
-  "Opening Instagram",
-  "Entering Instagram Username",
-  "Entering Instagram Password",
-  "Waiting for Instagram 2FA page",
-  "Waiting for Instagram 2FA",
-  "Generating Instagram TOTP",
-  "Manual Instagram dismiss required",
-  "Dismissing Instagram prompts",
-  "Checking Instagram home",
-  "Scrolling Instagram home",
-  "Logging out Instagram",
-  "Confirming Instagram logout",
   "Starting login workflow",
   "Opening login",
   "Entering Username",
@@ -58,11 +43,8 @@ let activeTabIsAvatar = false;
 let activeTabIsAvatarList = false;
 let avatarUploadTarget = null;
 let challengeEmail = "";
+let currentAccount = {};
 let isWorking = false;
-
-function field(id) {
-  return document.querySelector(`#${id}`);
-}
 
 function setStatus(message, tone = "") {
   elements.status.textContent = message;
@@ -80,22 +62,10 @@ function setBusy(isBusy) {
   elements.stopWorkflow.style.display = isBusy ? "block" : "none";
   elements.stopWorkflow.disabled = false;
   updateLoginAvailability();
-  elements.togglePassword.disabled = isBusy;
-}
-
-function setPasswordVisible(isVisible) {
-  const password = field("password");
-  password.type = isVisible ? "text" : "password";
-  elements.togglePassword.classList.toggle("is-visible", isVisible);
-  elements.togglePassword.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
-  elements.togglePassword.title = isVisible ? "Hide password" : "Show password";
 }
 
 function getAccountFromForm() {
-  return accountFields.reduce((account, key) => {
-    account[key] = key === "password" ? field(key).value : field(key).value.trim();
-    return account;
-  }, {});
+  return { ...currentAccount };
 }
 
 function validateAccount(account) {
@@ -115,10 +85,6 @@ function getBatchUsernames() {
     .split(/[\s,]+/)
     .map((username) => username.trim().replace(/^@/, ""))
     .filter(Boolean);
-}
-
-function getBatchPlatform() {
-  return elements.batchPlatform?.value === "instagram" ? "instagram" : "twitter";
 }
 
 function updateBatchCount() {
@@ -190,8 +156,7 @@ function updateLoginAvailability({ updateStatus = true } = {}) {
   }
 
   if (activeTabIsAvatarList) {
-    const platform = getBatchPlatform() === "instagram" ? "Instagram" : "Twitter/X";
-    setStatus(avatarListReady ? `Ready to search ${batchCount} ${platform} username(s).` : "Paste username list to continue.", avatarListReady ? "" : "error");
+    setStatus(avatarListReady ? `Ready to search ${batchCount} Twitter/X username(s).` : "Paste username list to continue.", avatarListReady ? "" : "error");
     return;
   }
 
@@ -201,13 +166,13 @@ function updateLoginAvailability({ updateStatus = true } = {}) {
   }
 
   if (missingFields.length) {
-    setStatus("Fill username, password, and TOTP secret to continue.", "error");
+    setStatus("Account data is not available on this avatar page.", "error");
     return;
   }
 
   if (
     elements.status.classList.contains("error") ||
-    elements.status.textContent === "Fill username, password, and TOTP secret to continue."
+    elements.status.textContent === "Account data is not available on this avatar page."
   ) {
     setStatus("Ready");
   }
@@ -220,10 +185,6 @@ async function getActiveTab() {
 
 function isXTab(tab) {
   return /^https:\/\/([^/]+\.)?(x|twitter)\.com\//i.test(tab?.url || "");
-}
-
-function isInstagramTab(tab) {
-  return /^https:\/\/([^/]+\.)?instagram\.com\//i.test(tab?.url || "");
 }
 
 function isAvatarTab(tab) {
@@ -247,7 +208,7 @@ function isAvatarListTab(tab) {
 function isBatchBaseTab(tab) {
   try {
     const url = new URL(tab?.url || "");
-    return /^https?:$/i.test(url.protocol) && !isXTab(tab) && !isInstagramTab(tab) && !isAvatarTab(tab);
+    return /^https?:$/i.test(url.protocol) && !isXTab(tab) && !isAvatarTab(tab);
   } catch (_error) {
     return false;
   }
@@ -313,10 +274,8 @@ async function refreshTabState() {
 
 async function clearAccountData() {
   await chrome.storage.local.remove("account");
+  currentAccount = {};
   challengeEmail = "";
-  for (const key of accountFields) {
-    field(key).value = "";
-  }
   updateLoginAvailability({ updateStatus: false });
 }
 
@@ -470,9 +429,7 @@ async function getAvatarAccountFromTab(tabId) {
 }
 
 function applyAccountToForm(account) {
-  for (const key of accountFields) {
-    field(key).value = account[key] || "";
-  }
+  currentAccount = { ...account };
 }
 
 async function loadAvatarAccountFromTab(tab) {
@@ -536,13 +493,12 @@ async function loginAndExport() {
       elements.stopWorkflow.hidden = true;
       elements.stopWorkflow.style.display = "none";
       elements.stopWorkflow.disabled = false;
-      elements.togglePassword.disabled = false;
     }
     return;
   }
 
   const batchUsernames = activeTabIsAvatarList ? getBatchUsernames() : [];
-  const batchPlatform = activeTabIsAvatarList ? getBatchPlatform() : "twitter";
+  const batchPlatform = "twitter";
   if (activeTabIsAvatarList && batchUsernames.length === 0) {
     setStatus("Paste username list to continue.", "error");
     return;
@@ -581,7 +537,6 @@ async function loginAndExport() {
     elements.stopWorkflow.style.display = "none";
     elements.stopWorkflow.disabled = false;
     isWorking = false;
-    elements.togglePassword.disabled = false;
     updateLoginAvailability({ updateStatus: false });
     setStatus(error?.message || "Cookie export failed.", "error");
   }
@@ -605,10 +560,8 @@ async function loadSavedState() {
     "authxBatchReport",
   ]);
   renderBatchReport(authxBatchReport);
+  currentAccount = { ...account };
   challengeEmail = account.email || "";
-  for (const key of accountFields) {
-    field(key).value = account[key] || "";
-  }
 
   await refreshTabState();
   if (authxJob?.status) {
@@ -631,7 +584,6 @@ async function handleJobStatus(status, tone = "") {
     elements.stopWorkflow.hidden = false;
     elements.stopWorkflow.style.display = "block";
     elements.stopWorkflow.disabled = false;
-    elements.togglePassword.disabled = true;
     updateLoginAvailability({ updateStatus: false });
     return;
   }
@@ -644,7 +596,6 @@ async function handleJobStatus(status, tone = "") {
     elements.stopWorkflow.hidden = true;
     elements.stopWorkflow.style.display = "none";
     elements.stopWorkflow.disabled = false;
-    elements.togglePassword.disabled = false;
     updateLoginAvailability({ updateStatus: false });
     return;
   }
@@ -655,7 +606,6 @@ async function handleJobStatus(status, tone = "") {
     elements.stopWorkflow.hidden = true;
     elements.stopWorkflow.style.display = "none";
     elements.stopWorkflow.disabled = false;
-    elements.togglePassword.disabled = false;
     updateLoginAvailability({ updateStatus: false });
   }
 }
@@ -681,34 +631,10 @@ elements.clearBatchReport.addEventListener("click", () => {
   clearBatchReport().catch((error) => setStatus(error?.message || "Failed to clear report.", "error"));
 });
 
-elements.togglePassword.addEventListener("click", () => {
-  setPasswordVisible(field("password").type === "password");
-});
-
-field("username").addEventListener("input", () => {
-  if (!isWorking && elements.loginExport.textContent === "Finish") {
-    elements.loginExport.textContent = idleLoginButtonLabel();
-  }
-  updateLoginAvailability();
-});
-
-for (const key of ["password", "totpSecret"]) {
-  field(key).addEventListener("input", () => {
-    if (!isWorking && elements.loginExport.textContent === "Finish") {
-      elements.loginExport.textContent = idleLoginButtonLabel();
-    }
-    updateLoginAvailability();
-  });
-}
-
 elements.batchUsernames.addEventListener("input", () => {
   if (!isWorking && elements.loginExport.textContent === "Finish") {
     elements.loginExport.textContent = idleLoginButtonLabel();
   }
-  updateLoginAvailability();
-});
-
-elements.batchPlatform.addEventListener("change", () => {
   updateLoginAvailability();
 });
 

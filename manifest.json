@@ -3,6 +3,7 @@
   "name": "AuthX",
   "description": "Authenticate X accounts and export session cookies locally.",
   "version": "1.0.0",
+  "incognito": "spanning",
   "icons": {
     "16": "public/assets/icon16.png",
     "48": "public/assets/icon48.png",
@@ -24,6 +25,7 @@
     "storage",
     "cookies",
     "tabs",
+    "windows",
     "activeTab",
     "scripting",
     "downloads"
