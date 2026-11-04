@@ -252,66 +252,6 @@ textarea:focus {
   color: var(--danger);
 }
 
-.password-field {
-  position: relative;
-  display: block;
-}
-
-.password-field input {
-  padding-right: 42px;
-}
-
-.icon-button.password-toggle {
-  position: absolute;
-  top: 50%;
-  right: 6px;
-  display: grid;
-  place-items: center;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  box-shadow: none;
-  transform: translateY(-50%);
-}
-
-.icon-button.password-toggle:hover {
-  background: rgba(47, 111, 115, 0.1);
-  color: var(--accent-dark);
-}
-
-.icon-button.password-toggle:active {
-  transform: translateY(-50%);
-}
-
-.icon-button.password-toggle:disabled {
-  opacity: 0.45;
-}
-
-.password-toggle svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.9;
-}
-
-.password-toggle .eye-closed,
-.password-toggle.is-visible .eye-open {
-  display: none;
-}
-
-.password-toggle.is-visible .eye-closed {
-  display: block;
-}
-
 details {
   border-top: 1px solid var(--line);
   padding-top: 8px;
