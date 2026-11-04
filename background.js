@@ -89,15 +89,29 @@ async function throwIfCancelled() {
 }
 
 async function sendTabMessage(tabId, message) {
-  try {
-    return await chrome.tabs.sendMessage(tabId, message);
-  } catch (_error) {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["totp.js", "content.js"],
-    });
-    return chrome.tabs.sendMessage(tabId, message);
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await throwIfCancelled();
+    try {
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (error) {
+      lastError = error;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ["totp.js", "content.js"],
+        });
+      } catch (injectionError) {
+        lastError = injectionError;
+      }
+      await sleep(500);
+    }
   }
+
+  const error = new Error(lastError?.message || "X content script did not become ready.");
+  error.authxFatal = true;
+  throw error;
 }
 
 async function waitForTabReady(tabId) {
@@ -204,17 +218,25 @@ async function closeIncognitoTarget({ tabId, windowId }) {
 }
 
 async function openIncognitoXTab() {
-  const window = await chrome.windows.create({
+  const createdWindow = await chrome.windows.create({
     url: "https://x.com",
     incognito: true,
     focused: true,
   });
-  const tab = window.tabs?.[0];
+  if (!createdWindow?.id) {
+    throw new Error("Failed to create incognito X window.");
+  }
+  const populatedWindow = createdWindow.tabs?.length
+    ? createdWindow
+    : await chrome.windows.get(createdWindow.id, { populate: true }).catch(() => null);
+  const [tab] = populatedWindow?.tabs?.length
+    ? populatedWindow.tabs
+    : await chrome.tabs.query({ windowId: createdWindow.id });
   if (!tab?.id) {
     throw new Error("Failed to open incognito X tab.");
   }
   const readyTab = await waitForTabReady(tab.id);
-  return { ...readyTab, windowId: window.id };
+  return { ...readyTab, windowId: createdWindow.id };
 }
 
 function extractAvatarAccountFromPage() {
@@ -319,7 +341,7 @@ function extractAvatarAccountFromPage() {
       lines.find(
         (line) =>
           new RegExp(`^${handlePattern.source}$`).test(line) &&
-          !/^(avatar|detail|aktif|kembali|twitter|instagram|password|2fa|agent|new)$/i.test(line),
+          !/^(avatar|detail|aktif|kembali|twitter|password|2fa|agent|new)$/i.test(line),
       ) || ""
     );
   }
@@ -465,6 +487,11 @@ function assertAvatarAccountReady(account, uploadTarget) {
   if (!uploadTarget?.avatarId) throw new Error("Avatar ID not found.");
   if (!uploadTarget?.apiBaseUrl) throw new Error("Avatar API URL not found.");
   if (!uploadTarget?.authToken) throw new Error("Authorization token not found.");
+}
+
+function isWorkflowInfrastructureError(error) {
+  const message = error?.message || "";
+  return /incognito (?:X )?window|incognito X tab|content script did not become ready|X tab did not finish loading|message channel closed|receiving end does not exist|extension context invalidated/i.test(message);
 }
 
 async function executeLoginExport({
@@ -665,6 +692,9 @@ async function runAvatarBatchWorkflow({ tabId, batchUsernames = [] }) {
         });
       } catch (error) {
         if (error?.authxStopped || error?.message === "Workflow stopped.") {
+          throw error;
+        }
+        if (isWorkflowInfrastructureError(error)) {
           throw error;
         }
         const reason = error?.message || "Login failed.";
