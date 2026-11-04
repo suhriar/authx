@@ -92,7 +92,7 @@ During login, AuthX reports progress in the popup. After submitting the password
 Example:
 
 ```text
-https://tech-86.com/avatars/f620f12-18c9-48a0-92fe-eafeae1781ea
+https://domain.com/avatars/f620f12-18c9-48a0-92fe-eafeae1781ea
 ```
 
 2. Open AuthX.
@@ -112,7 +112,7 @@ AuthX extracts the avatar username, password, and 2FA secret from the current pa
 Example:
 
 ```text
-https://tech-86.com/avatars?social_media=twitter&page=1&status=inactive&page_size=100
+https://domain.com/avatars?social_media=twitter&page=1&status=inactive&page_size=100
 ```
 
 2. Open AuthX and confirm the tab badge shows `Avatar List`.

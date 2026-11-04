@@ -28,7 +28,7 @@ Use this skill before changing the popup surface.
 ## Update Rules
 
 - If adding an active workflow status, add it to `PROCESSING_STATUSES` in `popup.js`.
-- If changing avatar extraction, keep domain detection path-based rather than hardcoding `tech-86.com`.
+- If changing avatar extraction, keep domain detection path-based rather than hardcoding `domain.com`.
 - Keep controls as accessible native buttons/inputs.
 - Avoid adding UI libraries for this small extension.
 - Keep the compact popup layout and existing color system unless the user asks for a redesign.
