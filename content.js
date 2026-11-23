@@ -15,6 +15,8 @@
   const LOGIN_TIMEOUT_MS = 180000;
 
   const usernameSelectors = [
+    'main input[data-testid="ocfEnterTextTextInput"]',
+    'main input[name="text"]',
     'main input[name="username_or_email"]',
     'main input[autocomplete*="username"]',
     'main input[type="email"]',
@@ -62,8 +64,12 @@
   }
 
   function setNativeValue(element, value) {
-    const prototype = Object.getPrototypeOf(element);
-    const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+    let prototype = Object.getPrototypeOf(element);
+    let descriptor;
+    while (prototype && !descriptor) {
+      descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+      prototype = Object.getPrototypeOf(prototype);
+    }
     descriptor?.set?.call(element, value);
     element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
@@ -109,6 +115,7 @@
       for (const selector of selectors) {
         for (const candidate of visibleElements(selector)) {
           if (candidate.disabled || candidate.readOnly) continue;
+          if (candidate.value === value) return true;
           if (await typeValue(candidate, value)) {
             return true;
           }
